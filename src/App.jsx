@@ -3,8 +3,10 @@ import {
   Menu, X, Plus, Inbox as InboxIcon, CalendarDays, CalendarRange, Hash,
   Tag, Check, Flag, ChevronDown, ChevronRight, ChevronLeft, MoreHorizontal, Trash2,
   Pencil, GripVertical, Calendar, CalendarPlus, Repeat, FolderPlus, User, Circle,
+  Search, ArrowUpDown, Filter as FilterIcon,
 } from 'lucide-react'
 import CalendarView from './Calendar.jsx'
+import AccountMenu from './AccountMenu.jsx'
 
 /* ============================================================
    CONSTANTS & HELPERS
@@ -99,6 +101,52 @@ function recurrenceLabel(rule) {
   return 'Recurring'
 }
 
+/** Evaluates a simple Todoist-style filter query against a task.
+ *  Supports: p1-p4, today, overdue, no date, #project, @label, plain text (matches content). */
+function evaluateFilterQuery(task, query, projects) {
+  if (!query || !query.trim()) return true
+  const conditions = query.split('&').map(s => s.trim().toLowerCase()).filter(Boolean)
+  if (conditions.length === 0) return true
+  return conditions.every(cond => {
+    if (/^p[1-4]$/.test(cond)) return task.priority === parseInt(cond[1], 10)
+    if (cond === 'today') return !!(task.due && task.due.date === todayISO())
+    if (cond === 'overdue') return !!(task.due && !task.due.recurring && isBeforeToday(task.due.date))
+    if (cond === 'no date' || cond === 'nodate') return !task.due
+    if (cond === 'recurring') return !!task.due?.recurring
+    if (cond.startsWith('#')) {
+      const name = cond.slice(1).trim()
+      const project = projects.find(p => p.name.toLowerCase() === name)
+      return project ? task.projectId === project.id : false
+    }
+    if (cond.startsWith('@')) {
+      const name = cond.slice(1).trim()
+      return !!task.labels?.some(l => l.toLowerCase() === name)
+    }
+    return task.content.toLowerCase().includes(cond)
+  })
+}
+
+const SORT_OPTIONS = [
+  { value: 'manual', label: 'Manual order' },
+  { value: 'priority', label: 'Priority' },
+  { value: 'date', label: 'Due date' },
+  { value: 'name', label: 'Name' },
+]
+
+/** Returns a comparator for a given sort mode; falls back to manual drag order. */
+function compareTasksBy(sortBy) {
+  return (a, b) => {
+    if (sortBy === 'priority') return a.priority - b.priority || a.order - b.order
+    if (sortBy === 'date') {
+      const ad = a.due?.date || '9999-12-31'
+      const bd = b.due?.date || '9999-12-31'
+      return ad.localeCompare(bd) || a.order - b.order
+    }
+    if (sortBy === 'name') return a.content.localeCompare(b.content) || a.order - b.order
+    return a.order - b.order
+  }
+}
+
 /** Parses Todoist-style quick-add syntax out of free text. */
 function parseQuickAdd(raw, projects, labels) {
   let text = raw
@@ -191,6 +239,10 @@ function loadData() {
     ],
     labels: ['getting-started', 'errands'],
     labelColors: { 'getting-started': '#7ecc49', errands: '#14aaf5' },
+    filters: [
+      { id: uid(), name: 'Priority 1', color: '#db4c3f', query: 'p1' },
+      { id: uid(), name: 'Overdue', color: '#ff9933', query: 'overdue' },
+    ],
   }
 }
 
@@ -301,6 +353,7 @@ function TaskRow({
   const isToday = task.due && task.due.date === todayISO()
 
   function handleToggle() {
+    if (task.completed) { onToggle(task); return }
     if (task.due?.recurring) { onToggle(task); return }
     setCompleting(true)
     setTimeout(() => onToggle(task), 260)
@@ -309,7 +362,7 @@ function TaskRow({
   return (
     <div>
       <div
-        className={`task-row ${isDragging ? 'dragging' : ''} ${dragOverEdge === 'top' ? 'drag-over-top' : ''} ${dragOverEdge === 'bottom' ? 'drag-over-bottom' : ''} ${completing ? 'completing' : ''}`}
+        className={`task-row ${isDragging ? 'dragging' : ''} ${dragOverEdge === 'top' ? 'drag-over-top' : ''} ${dragOverEdge === 'bottom' ? 'drag-over-bottom' : ''} ${completing ? 'completing' : ''} ${task.completed && !completing ? 'completed' : ''}`}
         style={{ paddingLeft: depth ? 0 : undefined }}
         draggable={!!dragHandlers}
         onDragStart={dragHandlers?.onDragStart}
@@ -321,12 +374,12 @@ function TaskRow({
           <span className="drag-handle"><GripVertical size={15} /></span>
         )}
         <button
-          className={`checkbox ${task.priority < 4 ? 'p' + task.priority : ''} ${completing ? 'checked' : ''}`}
+          className={`checkbox ${task.priority < 4 ? 'p' + task.priority : ''} ${(completing || task.completed) ? 'checked' : ''}`}
           onClick={handleToggle}
           aria-label="Complete task"
           type="button"
         >
-          {completing && <Check size={12} strokeWidth={3} />}
+          {(completing || task.completed) && <Check size={12} strokeWidth={3} />}
         </button>
 
         <div className="task-body" onClick={() => onOpen(task)}>
@@ -397,6 +450,40 @@ function TaskRow({
           {subtasks.map(st => (
             <TaskRow key={st.id} task={st} allTasks={allTasks} projects={projects} labelColors={labelColors} depth={depth + 1}
               onToggle={onToggle} onDelete={onDelete} onOpen={onOpen} onUpdate={onUpdate} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ============================================================
+   COMPLETED TASKS TOGGLE (per section / per list)
+   ============================================================ */
+function CompletedList({ tasks, allTasks, projects, labelColors, onToggle, onDelete, onOpen, onUpdate }) {
+  const [open, setOpen] = useState(false)
+  if (!tasks || tasks.length === 0) return null
+  const sorted = [...tasks].sort((a, b) => a.order - b.order)
+  return (
+    <div className="completed-section">
+      <button type="button" className="completed-toggle" onClick={() => setOpen(v => !v)}>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        {open ? 'Hide' : 'Show'} completed ({tasks.length})
+      </button>
+      {open && (
+        <div className="completed-tasks">
+          {sorted.map(t => (
+            <TaskRow
+              key={t.id}
+              task={t}
+              allTasks={allTasks}
+              projects={projects}
+              labelColors={labelColors}
+              onToggle={onToggle}
+              onDelete={onDelete}
+              onOpen={onOpen}
+              onUpdate={onUpdate}
+            />
           ))}
         </div>
       )}
@@ -681,10 +768,181 @@ function LabelModal({ label, existingLabels, existingColor, onClose, onSave, onD
 }
 
 /* ============================================================
+   FILTER MODAL (create/edit saved filters)
+   ============================================================ */
+function FilterModal({ filter, onClose, onSave, onDelete }) {
+  const [name, setName] = useState(filter?.name || '')
+  const [query, setQuery] = useState(filter?.query || '')
+  const [color, setColor] = useState(filter?.color || PROJECT_COLORS[0])
+  const trimmedName = name.trim()
+  const trimmedQuery = query.trim()
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 420 }}>
+        <div className="modal-header">
+          <h3>{filter ? 'Edit filter' : 'Add filter'}</h3>
+          <IconBtn icon={X} title="Close" onClick={onClose} />
+        </div>
+        <div className="modal-body">
+          <div className="field">
+            <label>Name</label>
+            <input type="text" autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Filter name" />
+          </div>
+          <div className="field">
+            <label>Query</label>
+            <input type="text" value={query} onChange={e => setQuery(e.target.value)} placeholder="p1 & today" />
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 6, lineHeight: 1.5 }}>
+              Combine conditions with "&amp;". Supports <code>p1</code>-<code>p4</code>, <code>today</code>, <code>overdue</code>, <code>no date</code>, <code>recurring</code>, <code>#project</code>, <code>@label</code>, or plain text to match task names.
+            </div>
+          </div>
+          <div className="field">
+            <label>Color</label>
+            <div className="color-grid">
+              {PROJECT_COLORS.map(c => (
+                <button key={c} type="button" className={`color-swatch ${color === c ? 'selected' : ''}`} style={{ background: c }} onClick={() => setColor(c)} />
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          {filter && (
+            <button className="btn ghost" style={{ color: 'var(--red)', marginRight: 'auto' }} onClick={() => { onDelete(filter.id); onClose() }}>Delete</button>
+          )}
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!trimmedName || !trimmedQuery}
+            onClick={() => { onSave({ id: filter?.id, name: trimmedName, query: trimmedQuery, color }); onClose() }}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ============================================================
+   SORT MENU
+   ============================================================ */
+function SortMenu({ value, onChange, onClose }) {
+  return (
+    <Popover onClose={onClose} style={{ right: 0, left: 'auto', top: 32 }}>
+      {SORT_OPTIONS.map(o => (
+        <button key={o.value} className={`popover-item ${value === o.value ? 'selected' : ''}`}
+          onClick={() => { onChange(o.value); onClose() }}>
+          {o.label}
+        </button>
+      ))}
+    </Popover>
+  )
+}
+
+function SortMenuButton({ value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const current = SORT_OPTIONS.find(o => o.value === value)
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button" className={`pill-btn ${value !== 'manual' ? 'active' : ''}`} onClick={() => setOpen(v => !v)}>
+        <ArrowUpDown size={13} /> {value === 'manual' ? 'Sort' : current?.label}
+      </button>
+      {open && <SortMenu value={value} onChange={onChange} onClose={() => setOpen(false)} />}
+    </div>
+  )
+}
+
+/* ============================================================
+   SEARCH MODAL (popup with live results)
+   ============================================================ */
+function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onClose }) {
+  const [query, setQuery] = useState('')
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const trimmed = query.trim()
+  const lower = trimmed.toLowerCase()
+
+  let results = []
+  if (trimmed) {
+    if (lower.startsWith('#')) {
+      const term = lower.slice(1)
+      results = tasks.filter(t => {
+        const p = projects.find(pr => pr.id === t.projectId)
+        return p && p.name.toLowerCase().includes(term)
+      })
+    } else if (lower.startsWith('@')) {
+      const term = lower.slice(1)
+      results = tasks.filter(t => t.labels?.some(l => l.toLowerCase().includes(term)))
+    } else {
+      results = tasks.filter(t => t.content.toLowerCase().includes(lower))
+    }
+  }
+
+  const navItems = [
+    { icon: InboxIcon, label: 'Go to Inbox', action: () => onGoTo({ type: 'inbox' }) },
+    { icon: CalendarDays, label: 'Go to Today', action: () => onGoTo({ type: 'today' }) },
+    { icon: CalendarRange, label: 'Go to Upcoming', action: () => onGoTo({ type: 'upcoming' }) },
+  ]
+
+  return (
+    <div className="modal-backdrop search-backdrop" onClick={onClose}>
+      <div className="search-modal" onClick={e => e.stopPropagation()}>
+        <div className="search-input-row">
+          <Search size={16} />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search tasks, #project, @label..."
+            onKeyDown={e => { if (e.key === 'Escape') onClose() }}
+          />
+          {query && <IconBtn icon={X} title="Clear" onClick={() => setQuery('')} />}
+        </div>
+
+        {!trimmed ? (
+          <div className="search-section">
+            <div className="search-section-label">Navigation</div>
+            {navItems.map(n => (
+              <button key={n.label} type="button" className="search-result-item" onClick={() => { n.action(); onClose() }}>
+                <n.icon size={15} /> {n.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="search-section">
+            <div className="search-section-label">{results.length} result{results.length !== 1 ? 's' : ''}</div>
+            {results.length === 0 && <div className="search-empty">No matching tasks.</div>}
+            {results.slice(0, 40).map(t => {
+              const project = projects.find(p => p.id === t.projectId)
+              return (
+                <button key={t.id} type="button" className="search-result-item" onClick={() => { onOpenTask(t); onClose() }}>
+                  <span className={`search-result-check ${t.completed ? 'checked' : ''}`}>
+                    {t.completed && <Check size={10} strokeWidth={3} />}
+                  </span>
+                  <span className="search-result-text" style={{ textDecoration: t.completed ? 'line-through' : 'none' }}>
+                    {t.content}
+                  </span>
+                  {t.labels?.slice(0, 2).map(l => (
+                    <span key={l} className="meta-chip label-chip" style={labelColors[l] ? { color: labelColors[l], background: labelColors[l] + '1f' } : undefined}>
+                      <Tag size={10} />{l}
+                    </span>
+                  ))}
+                  {project && <span className="search-result-meta">{project.name}</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ============================================================
    TASK LIST (handles drag & drop reorder + sections)
    ============================================================ */
 function TaskListView({
-  tasks, allTasks, projects, labelColors, sections, showSections, showAddPerSection,
+  tasks, allTasks, projects, labelColors, completedTasks = [], sortBy = 'manual', sections, showSections, showAddPerSection,
   onToggle, onDelete, onOpen, onUpdate, onReorder, onAddSection,
   addFormDefaults, onAddTask,
 }) {
@@ -711,7 +969,7 @@ function TaskListView({
   }
 
   function renderTasks(list) {
-    return list.filter(t => !t.parentId).sort((a, b) => a.order - b.order).map(t => (
+    return list.filter(t => !t.parentId).sort(compareTasksBy(sortBy)).map(t => (
       <TaskRow
         key={t.id}
         task={t}
@@ -722,7 +980,7 @@ function TaskListView({
         onDelete={onDelete}
         onOpen={onOpen}
         onUpdate={onUpdate}
-        dragHandlers={makeDragHandlers(t)}
+        dragHandlers={sortBy === 'manual' ? makeDragHandlers(t) : undefined}
         isDragging={dragId === t.id}
         dragOverEdge={overInfo?.id === t.id ? overInfo.edge : null}
       />
@@ -732,7 +990,7 @@ function TaskListView({
   if (!showSections) {
     return (
       <div className="section-block">
-        {tasks.length === 0 && (
+        {tasks.length === 0 && completedTasks.length === 0 && (
           <div className="empty-state">
             <Check size={32} />
             <h4>All clear</h4>
@@ -740,6 +998,16 @@ function TaskListView({
           </div>
         )}
         {renderTasks(tasks)}
+        <CompletedList
+          tasks={completedTasks}
+          allTasks={allTasks}
+          projects={projects}
+          labelColors={labelColors}
+          onToggle={onToggle}
+          onDelete={onDelete}
+          onOpen={onOpen}
+          onUpdate={onUpdate}
+        />
         <div className="add-task-inline">
           {openAddFor === 'root' ? (
             <AddTaskForm
@@ -761,12 +1029,23 @@ function TaskListView({
   }
 
   const unsectioned = tasks.filter(t => !t.sectionId)
+  const completedUnsectioned = completedTasks.filter(t => !t.sectionId)
 
   return (
     <div>
-      {unsectioned.length > 0 && (
+      {(unsectioned.length > 0 || completedUnsectioned.length > 0) && (
         <div className="section-block">
           {renderTasks(unsectioned)}
+          <CompletedList
+            tasks={completedUnsectioned}
+            allTasks={allTasks}
+            projects={projects}
+            labelColors={labelColors}
+            onToggle={onToggle}
+            onDelete={onDelete}
+            onOpen={onOpen}
+            onUpdate={onUpdate}
+          />
         </div>
       )}
       <div className="add-task-inline" style={{ marginBottom: 8 }}>
@@ -780,14 +1059,25 @@ function TaskListView({
 
       {sections.map(sec => {
         const secTasks = tasks.filter(t => t.sectionId === sec.id)
+        const secCompleted = completedTasks.filter(t => t.sectionId === sec.id)
         return (
           <div className="section-block" key={sec.id}>
             <div className="section-title-row">
               <span className="section-title">{sec.name}</span>
               <span className="section-count">{secTasks.filter(t => !t.completed).length}</span>
             </div>
-            {secTasks.length === 0 && <div style={{ color: 'var(--text-faint)', fontSize: 13, padding: '4px 4px 8px' }}>No tasks</div>}
+            {secTasks.length === 0 && secCompleted.length === 0 && <div style={{ color: 'var(--text-faint)', fontSize: 13, padding: '4px 4px 8px' }}>No tasks</div>}
             {renderTasks(secTasks)}
+            <CompletedList
+              tasks={secCompleted}
+              allTasks={allTasks}
+              projects={projects}
+              labelColors={labelColors}
+              onToggle={onToggle}
+              onDelete={onDelete}
+              onOpen={onOpen}
+              onUpdate={onUpdate}
+            />
             <div className="add-task-inline">
               {openAddFor === sec.id ? (
                 <AddTaskForm projects={projects} defaultProjectId={addFormDefaults.projectId} defaultSectionId={sec.id} autoFocus
@@ -816,14 +1106,23 @@ function TaskListView({
 function Sidebar({
   projects, view, setView, onAddTaskClick, onAddProject, onEditProject, onDeleteProject,
   counts, open, onToggle, labels, labelColors = {}, onAddLabel, onEditLabel,
+  filters = [], onAddFilter, onEditFilter, onSearchClick,
 }) {
+  const [showAccountMenu, setShowAccountMenu] = useState(false)
+
   return (
     <>
       <div className={`sidebar-overlay ${open ? 'open' : ''}`} onClick={onToggle} />
       <aside className={`sidebar ${open ? '' : 'collapsed'}`}>
-        <div className="sidebar-header">
+        <div className="sidebar-header" style={{ position: 'relative' }} onClick={() => setShowAccountMenu(v => !v)}>
           <div className="avatar"><User size={15} /></div>
           <div className="workspace-name">My Todoist</div>
+          <ChevronDown size={14} className="account-caret" />
+          {showAccountMenu && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, zIndex: 60 }}>
+              <AccountMenu onClose={() => setShowAccountMenu(false)} />
+            </div>
+          )}
         </div>
 
         <button className="add-task-row" onClick={onAddTaskClick}>
@@ -831,6 +1130,10 @@ function Sidebar({
         </button>
 
         <div className="nav-list">
+          <button className={`nav-item ${view.type === 'search' ? 'active' : ''}`} onClick={onSearchClick}>
+            <span className="nav-icon"><Search size={17} /></span>
+            <span className="nav-label">Search</span>
+          </button>
           <button className={`nav-item ${view.type === 'inbox' ? 'active' : ''}`} onClick={() => setView({ type: 'inbox' })}>
             <span className="nav-icon"><InboxIcon size={17} /></span>
             <span className="nav-label">Inbox</span>
@@ -871,6 +1174,27 @@ function Sidebar({
               </div>
             ))}
           </div>
+        </div>
+
+        <div className="sidebar-section">
+          <div className="sidebar-section-head">
+            <span>Filters</span>
+            <button className="add-mini" onClick={onAddFilter} title="Add filter"><Plus size={15} /></button>
+          </div>
+          {filters.length > 0 && (
+            <div className="nav-list">
+              {filters.map(f => (
+                <div key={f.id} style={{ display: 'flex', alignItems: 'center' }}>
+                  <button className={`nav-item ${view.type === 'filter' && view.id === f.id ? 'active' : ''}`} style={{ flex: 1 }}
+                    onClick={() => setView({ type: 'filter', id: f.id })}>
+                    <span className="nav-icon"><span className="project-dot" style={{ background: f.color }} /></span>
+                    <span className="nav-label">{f.name}</span>
+                  </button>
+                  <IconBtn icon={Pencil} title="Edit filter" size={13} onClick={() => onEditFilter(f)} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="sidebar-section">
@@ -917,7 +1241,29 @@ export default function App() {
   const [openTask, setOpenTask] = useState(null)
   const [projectModal, setProjectModal] = useState(null) // {mode:'new'|'edit', project}
   const [labelModal, setLabelModal] = useState(null) // {label} | 'new' | null
+  const [filterModal, setFilterModal] = useState(null) // {filter} | {filter: null} | null
   const [mobileAddOpen, setMobileAddOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [sortBy, setSortBy] = useState('manual')
+  const [toast, setToast] = useState(null) // {message, onUndo}
+  const toastTimer = useRef(null)
+
+  function showToast(message, onUndo) {
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    setToast({ message, onUndo })
+    toastTimer.current = setTimeout(() => setToast(null), 5000)
+  }
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
@@ -925,6 +1271,7 @@ export default function App() {
 
   const { projects, tasks, labels } = data
   const labelColors = data.labelColors || {}
+  const filters = data.filters || []
 
   function updateTasks(fn) {
     setData(d => ({ ...d, tasks: fn(d.tasks) }))
@@ -968,7 +1315,13 @@ export default function App() {
       updateTasks(ts => ts.map(t => t.id === task.id ? { ...t, due: { ...t.due, date: computeNextRecurrence(t.due.date, t.due.rule) } } : t))
       return
     }
-    updateTasks(ts => ts.map(t => t.id === task.id ? { ...t, completed: !t.completed } : t))
+    const willComplete = !task.completed
+    updateTasks(ts => ts.map(t => t.id === task.id ? { ...t, completed: willComplete } : t))
+    if (willComplete) {
+      showToast('Task completed', () => {
+        updateTasks(ts => ts.map(t => t.id === task.id ? { ...t, completed: false } : t))
+      })
+    }
   }
 
   function deleteTask(id) {
@@ -1062,6 +1415,19 @@ export default function App() {
     if (view.type === 'label' && view.id === name) setView({ type: 'inbox' })
   }
 
+  function saveFilter({ id, name, query, color }) {
+    setData(d => {
+      const existing = d.filters || []
+      if (id) return { ...d, filters: existing.map(f => f.id === id ? { ...f, name, query, color } : f) }
+      return { ...d, filters: [...existing, { id: uid(), name, query, color }] }
+    })
+  }
+
+  function deleteFilterFn(id) {
+    setData(d => ({ ...d, filters: (d.filters || []).filter(f => f.id !== id) }))
+    if (view.type === 'filter' && view.id === id) setView({ type: 'inbox' })
+  }
+
   const inbox = projects.find(p => p.isInbox)
 
   const counts = useMemo(() => {
@@ -1077,26 +1443,37 @@ export default function App() {
   const activeProject = view.type === 'project' ? projects.find(p => p.id === view.id) : null
 
   let viewTasks = []
+  let completedViewTasks = []
   let title = ''
   let showSections = false
   let addDefaults = { projectId: inbox?.id, due: null }
 
   if (view.type === 'inbox') {
     viewTasks = tasks.filter(t => t.projectId === inbox?.id && !t.completed)
+    completedViewTasks = tasks.filter(t => t.projectId === inbox?.id && t.completed && !t.parentId)
     title = 'Inbox'
     addDefaults = { projectId: inbox?.id, due: null }
   } else if (view.type === 'today') {
     viewTasks = tasks.filter(t => !t.completed && t.due && t.due.date <= todayISO())
+    completedViewTasks = tasks.filter(t => t.completed && !t.parentId && t.due && t.due.date <= todayISO())
     title = 'Today'
     addDefaults = { projectId: inbox?.id, due: { date: todayISO(), recurring: false, rule: null } }
   } else if (view.type === 'project') {
     viewTasks = tasks.filter(t => t.projectId === view.id && !t.completed)
+    completedViewTasks = tasks.filter(t => t.projectId === view.id && t.completed && !t.parentId)
     title = activeProject?.name || ''
     showSections = true
     addDefaults = { projectId: view.id, due: null }
   } else if (view.type === 'label') {
     viewTasks = tasks.filter(t => !t.completed && t.labels?.includes(view.id))
+    completedViewTasks = tasks.filter(t => t.completed && !t.parentId && t.labels?.includes(view.id))
     title = '@' + view.id
+    addDefaults = { projectId: inbox?.id, due: null }
+  } else if (view.type === 'filter') {
+    const activeFilter = filters.find(f => f.id === view.id)
+    viewTasks = tasks.filter(t => !t.completed && !t.parentId && activeFilter && evaluateFilterQuery(t, activeFilter.query, projects))
+    completedViewTasks = tasks.filter(t => t.completed && !t.parentId && activeFilter && evaluateFilterQuery(t, activeFilter.query, projects))
+    title = activeFilter?.name || 'Filter'
     addDefaults = { projectId: inbox?.id, due: null }
   }
 
