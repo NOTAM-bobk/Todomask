@@ -190,6 +190,7 @@ function loadData() {
       { id: uid(), content: 'Try typing "Buy milk tomorrow p1 @errands"', projectId: inboxId, sectionId: null, parentId: null, completed: false, priority: 4, due: null, labels: [], order: 1 },
     ],
     labels: ['getting-started', 'errands'],
+    labelColors: { 'getting-started': '#7ecc49', errands: '#14aaf5' },
   }
 }
 
@@ -222,7 +223,7 @@ function Popover({ children, onClose, style }) {
 /* ============================================================
    DUE DATE PICKER POPOVER
    ============================================================ */
-function DueDatePicker({ value, onChange, onClose }) {
+function DueDatePicker({ value, onChange, onClose, style }) {
   const [customDate, setCustomDate] = useState(value?.date || '')
   const quick = [
     { label: 'Today', date: todayISO() },
@@ -236,7 +237,7 @@ function DueDatePicker({ value, onChange, onClose }) {
     { label: 'Every month', rule: 'month' },
   ]
   return (
-    <Popover onClose={onClose} style={{ minWidth: 230 }}>
+    <Popover onClose={onClose} style={{ minWidth: 230, ...style }}>
       {quick.map(q => (
         <button key={q.label} className="popover-item" onClick={() => { onChange({ date: q.date, recurring: false, rule: null }); onClose() }}>
           <Calendar size={15} /> {q.label}
@@ -269,9 +270,9 @@ function DueDatePicker({ value, onChange, onClose }) {
 /* ============================================================
    PRIORITY PICKER POPOVER
    ============================================================ */
-function PriorityPicker({ value, onChange, onClose }) {
+function PriorityPicker({ value, onChange, onClose, style }) {
   return (
-    <Popover onClose={onClose}>
+    <Popover onClose={onClose} style={style}>
       {PRIORITIES.map(p => (
         <button key={p.value} className={`popover-item ${value === p.value ? 'selected' : ''}`}
           onClick={() => { onChange(p.value); onClose() }}>
@@ -286,7 +287,7 @@ function PriorityPicker({ value, onChange, onClose }) {
    TASK ROW (recursive for subtasks)
    ============================================================ */
 function TaskRow({
-  task, allTasks, projects, depth = 0, onToggle, onDelete, onOpen,
+  task, allTasks, projects, labelColors = {}, depth = 0, onToggle, onDelete, onOpen,
   onUpdate, dragHandlers, isDragging, dragOverEdge,
 }) {
   const [showDue, setShowDue] = useState(false)
@@ -341,9 +342,18 @@ function TaskRow({
                   {task.due.recurring ? recurrenceLabel(task.due.rule) : formatDueLabel(task.due.date)}
                 </span>
               )}
-              {task.labels?.map(l => (
-                <span key={l} className="meta-chip label-chip"><Tag size={11} />{l}</span>
-              ))}
+              {task.labels?.map(l => {
+                const c = labelColors[l]
+                return (
+                  <span
+                    key={l}
+                    className="meta-chip label-chip"
+                    style={c ? { color: c, background: c + '1f' } : undefined}
+                  >
+                    <Tag size={11} />{l}
+                  </span>
+                )
+              })}
               {project && !project.isInbox && (
                 <span className="meta-chip project-chip">
                   <span className="project-dot" style={{ background: project.color }} /> {project.name}
@@ -362,15 +372,21 @@ function TaskRow({
         <div className="task-row-actions" style={{ position: 'relative' }}>
           <IconBtn icon={Flag} title="Priority" onClick={e => { e.stopPropagation(); setShowPriority(true) }} />
           {showPriority && (
-            <div style={{ position: 'absolute', right: 0, top: 32 }}>
-              <PriorityPicker value={task.priority} onChange={v => onUpdate(task.id, { priority: v })} onClose={() => setShowPriority(false)} />
-            </div>
+            <PriorityPicker
+              value={task.priority}
+              onChange={v => onUpdate(task.id, { priority: v })}
+              onClose={() => setShowPriority(false)}
+              style={{ right: 0, left: 'auto', top: 32 }}
+            />
           )}
           <IconBtn icon={Calendar} title="Due date" onClick={e => { e.stopPropagation(); setShowDue(true) }} />
           {showDue && (
-            <div style={{ position: 'absolute', right: 0, top: 32 }}>
-              <DueDatePicker value={task.due} onChange={v => onUpdate(task.id, { due: v })} onClose={() => setShowDue(false)} />
-            </div>
+            <DueDatePicker
+              value={task.due}
+              onChange={v => onUpdate(task.id, { due: v })}
+              onClose={() => setShowDue(false)}
+              style={{ right: 0, left: 'auto', top: 32 }}
+            />
           )}
           <IconBtn icon={Trash2} title="Delete" danger onClick={e => { e.stopPropagation(); onDelete(task.id) }} />
         </div>
@@ -379,7 +395,7 @@ function TaskRow({
       {expanded && subtasks.length > 0 && (
         <div className="subtasks">
           {subtasks.map(st => (
-            <TaskRow key={st.id} task={st} allTasks={allTasks} projects={projects} depth={depth + 1}
+            <TaskRow key={st.id} task={st} allTasks={allTasks} projects={projects} labelColors={labelColors} depth={depth + 1}
               onToggle={onToggle} onDelete={onDelete} onOpen={onOpen} onUpdate={onUpdate} />
           ))}
         </div>
@@ -624,8 +640,9 @@ function ProjectModal({ project, onClose, onSave, onDelete }) {
 /* ============================================================
    LABEL MODAL (create/edit)
    ============================================================ */
-function LabelModal({ label, existingLabels, onClose, onSave, onDelete }) {
+function LabelModal({ label, existingLabels, existingColor, onClose, onSave, onDelete }) {
   const [name, setName] = useState(label || '')
+  const [color, setColor] = useState(existingColor || PROJECT_COLORS[0])
   const trimmed = name.trim()
   const conflict = trimmed && trimmed !== label && existingLabels.includes(trimmed)
 
@@ -642,13 +659,21 @@ function LabelModal({ label, existingLabels, onClose, onSave, onDelete }) {
             <input type="text" autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="label-name" />
             {conflict && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 4 }}>A label with that name already exists.</div>}
           </div>
+          <div className="field">
+            <label>Color</label>
+            <div className="color-grid">
+              {PROJECT_COLORS.map(c => (
+                <button key={c} type="button" className={`color-swatch ${color === c ? 'selected' : ''}`} style={{ background: c }} onClick={() => setColor(c)} />
+              ))}
+            </div>
+          </div>
         </div>
         <div className="modal-footer">
           {label && (
             <button className="btn ghost" style={{ color: 'var(--red)', marginRight: 'auto' }} onClick={() => { onDelete(label); onClose() }}>Delete</button>
           )}
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!trimmed || conflict} onClick={() => { onSave(label || null, trimmed); onClose() }}>Save</button>
+          <button className="btn primary" disabled={!trimmed || conflict} onClick={() => { onSave(label || null, trimmed, color); onClose() }}>Save</button>
         </div>
       </div>
     </div>
@@ -659,7 +684,7 @@ function LabelModal({ label, existingLabels, onClose, onSave, onDelete }) {
    TASK LIST (handles drag & drop reorder + sections)
    ============================================================ */
 function TaskListView({
-  tasks, allTasks, projects, sections, showSections, showAddPerSection,
+  tasks, allTasks, projects, labelColors, sections, showSections, showAddPerSection,
   onToggle, onDelete, onOpen, onUpdate, onReorder, onAddSection,
   addFormDefaults, onAddTask,
 }) {
@@ -692,6 +717,7 @@ function TaskListView({
         task={t}
         allTasks={allTasks}
         projects={projects}
+        labelColors={labelColors}
         onToggle={onToggle}
         onDelete={onDelete}
         onOpen={onOpen}
@@ -789,7 +815,7 @@ function TaskListView({
    ============================================================ */
 function Sidebar({
   projects, view, setView, onAddTaskClick, onAddProject, onEditProject, onDeleteProject,
-  counts, open, onToggle, labels, onAddLabel, onEditLabel,
+  counts, open, onToggle, labels, labelColors = {}, onAddLabel, onEditLabel,
 }) {
   return (
     <>
@@ -858,7 +884,7 @@ function Sidebar({
                 <div key={l} style={{ display: 'flex', alignItems: 'center' }}>
                   <button className={`nav-item ${view.type === 'label' && view.id === l ? 'active' : ''}`} style={{ flex: 1 }}
                     onClick={() => setView({ type: 'label', id: l })}>
-                    <span className="nav-icon"><Tag size={15} /></span>
+                    <span className="nav-icon"><Tag size={15} style={labelColors[l] ? { color: labelColors[l] } : undefined} /></span>
                     <span className="nav-label">{l}</span>
                   </button>
                   <IconBtn icon={Pencil} title="Edit label" size={13} onClick={() => onEditLabel(l)} />
@@ -898,6 +924,7 @@ export default function App() {
   }, [data])
 
   const { projects, tasks, labels } = data
+  const labelColors = data.labelColors || {}
 
   function updateTasks(fn) {
     setData(d => ({ ...d, tasks: fn(d.tasks) }))
@@ -1000,30 +1027,38 @@ export default function App() {
     }))
   }
 
-  function saveLabel(oldName, newName) {
+  function saveLabel(oldName, newName, color) {
     setData(d => {
+      const prevColors = d.labelColors || {}
       if (oldName) {
-        // renaming an existing label: update the label list and every task referencing it
+        // renaming an existing label: update the label list, its color, and every task referencing it
+        const { [oldName]: _old, ...restColors } = prevColors
         return {
           ...d,
           labels: d.labels.map(l => l === oldName ? newName : l),
+          labelColors: { ...restColors, [newName]: color || prevColors[oldName] },
           tasks: d.tasks.map(t => t.labels?.includes(oldName)
             ? { ...t, labels: t.labels.map(l => l === oldName ? newName : l) }
             : t),
         }
       }
       if (d.labels.includes(newName)) return d
-      return { ...d, labels: [...d.labels, newName] }
+      return { ...d, labels: [...d.labels, newName], labelColors: { ...prevColors, [newName]: color } }
     })
     if (oldName && view.type === 'label' && view.id === oldName) setView({ type: 'label', id: newName })
   }
 
   function deleteLabel(name) {
-    setData(d => ({
-      ...d,
-      labels: d.labels.filter(l => l !== name),
-      tasks: d.tasks.map(t => t.labels?.includes(name) ? { ...t, labels: t.labels.filter(l => l !== name) } : t),
-    }))
+    setData(d => {
+      const prevColors = d.labelColors || {}
+      const { [name]: _removed, ...restColors } = prevColors
+      return {
+        ...d,
+        labels: d.labels.filter(l => l !== name),
+        labelColors: restColors,
+        tasks: d.tasks.map(t => t.labels?.includes(name) ? { ...t, labels: t.labels.filter(l => l !== name) } : t),
+      }
+    })
     if (view.type === 'label' && view.id === name) setView({ type: 'inbox' })
   }
 
@@ -1083,6 +1118,7 @@ export default function App() {
         open={sidebarOpen}
         onToggle={() => setSidebarOpen(v => !v)}
         labels={labels}
+        labelColors={labelColors}
         onAddLabel={() => setLabelModal({ label: null })}
         onEditLabel={(l) => setLabelModal({ label: l })}
       />
@@ -1111,16 +1147,19 @@ export default function App() {
               <div className="task-list-wrap">
                 {days.map(day => {
                   const dayTasks = tasks.filter(t => !t.completed && t.due && t.due.date === day && !t.parentId)
+                  const dayLabel = formatDueLabel(day)
                   return (
                     <div className="section-block" key={day}>
                       <div className="day-group-title">
-                        {formatDueLabel(day)}
-                        <span className="day-sub">{dateFromISO(day).toLocaleDateString(undefined, { weekday: 'long' })}</span>
+                        {dayLabel}
+                        {dayLabel === 'Today' && (
+                          <span className="day-sub">{dateFromISO(day).toLocaleDateString(undefined, { weekday: 'long' })}</span>
+                        )}
                       </div>
                       {dayTasks.length === 0 ? (
                         <div style={{ color: 'var(--text-faint)', fontSize: 13, padding: '2px 4px 10px' }}>No tasks</div>
                       ) : dayTasks.sort((a, b) => a.order - b.order).map(t => (
-                        <TaskRow key={t.id} task={t} allTasks={tasks} projects={projects}
+                        <TaskRow key={t.id} task={t} allTasks={tasks} projects={projects} labelColors={labelColors}
                           onToggle={toggleTask} onDelete={deleteTask} onOpen={setOpenTask} onUpdate={updateTask} />
                       ))}
                     </div>
@@ -1147,6 +1186,7 @@ export default function App() {
                   tasks={viewTasks}
                   allTasks={tasks}
                   projects={projects}
+                  labelColors={labelColors}
                   sections={activeProject?.sections || []}
                   showSections={showSections}
                   onToggle={toggleTask}
@@ -1215,6 +1255,7 @@ export default function App() {
         <LabelModal
           label={labelModal.label}
           existingLabels={labels}
+          existingColor={labelModal.label ? labelColors[labelModal.label] : undefined}
           onClose={() => setLabelModal(null)}
           onSave={saveLabel}
           onDelete={deleteLabel}
