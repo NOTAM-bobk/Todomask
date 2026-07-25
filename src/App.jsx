@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Menu, X, Plus, Inbox as InboxIcon, CalendarDays, CalendarRange, Hash,
-  Tag, Check, Flag, ChevronDown, ChevronRight, MoreHorizontal, Trash2,
-  Pencil, GripVertical, Calendar, Repeat, FolderPlus, User, Circle,
+  Tag, Check, Flag, ChevronDown, ChevronRight, ChevronLeft, MoreHorizontal, Trash2,
+  Pencil, GripVertical, Calendar, CalendarPlus, Repeat, FolderPlus, User, Circle,
 } from 'lucide-react'
+import CalendarView from './Calendar.jsx'
 
 /* ============================================================
    CONSTANTS & HELPERS
@@ -621,6 +622,40 @@ function ProjectModal({ project, onClose, onSave, onDelete }) {
 }
 
 /* ============================================================
+   LABEL MODAL (create/edit)
+   ============================================================ */
+function LabelModal({ label, existingLabels, onClose, onSave, onDelete }) {
+  const [name, setName] = useState(label || '')
+  const trimmed = name.trim()
+  const conflict = trimmed && trimmed !== label && existingLabels.includes(trimmed)
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 360 }}>
+        <div className="modal-header">
+          <h3>{label ? 'Edit label' : 'Add label'}</h3>
+          <IconBtn icon={X} title="Close" onClick={onClose} />
+        </div>
+        <div className="modal-body">
+          <div className="field">
+            <label>Name</label>
+            <input type="text" autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="label-name" />
+            {conflict && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 4 }}>A label with that name already exists.</div>}
+          </div>
+        </div>
+        <div className="modal-footer">
+          {label && (
+            <button className="btn ghost" style={{ color: 'var(--red)', marginRight: 'auto' }} onClick={() => { onDelete(label); onClose() }}>Delete</button>
+          )}
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!trimmed || conflict} onClick={() => { onSave(label || null, trimmed); onClose() }}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ============================================================
    TASK LIST (handles drag & drop reorder + sections)
    ============================================================ */
 function TaskListView({
@@ -752,15 +787,17 @@ function TaskListView({
 /* ============================================================
    SIDEBAR
    ============================================================ */
-function Sidebar({ projects, view, setView, onAddTaskClick, onAddProject, onEditProject, onDeleteProject, counts, mobileOpen, closeMobile, labels }) {
+function Sidebar({
+  projects, view, setView, onAddTaskClick, onAddProject, onEditProject, onDeleteProject,
+  counts, open, onToggle, labels, onAddLabel, onEditLabel,
+}) {
   return (
     <>
-      <div className={`sidebar-overlay ${mobileOpen ? 'open' : ''}`} onClick={closeMobile} />
-      <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
+      <div className={`sidebar-overlay ${open ? 'open' : ''}`} onClick={onToggle} />
+      <aside className={`sidebar ${open ? '' : 'collapsed'}`}>
         <div className="sidebar-header">
           <div className="avatar"><User size={15} /></div>
           <div className="workspace-name">My Todoist</div>
-          <IconBtn icon={X} title="Close menu" className="sidebar-close" onClick={closeMobile} />
         </div>
 
         <button className="add-task-row" onClick={onAddTaskClick}>
@@ -781,6 +818,10 @@ function Sidebar({ projects, view, setView, onAddTaskClick, onAddProject, onEdit
           <button className={`nav-item ${view.type === 'upcoming' ? 'active' : ''}`} onClick={() => setView({ type: 'upcoming' })}>
             <span className="nav-icon"><CalendarRange size={17} /></span>
             <span className="nav-label">Upcoming</span>
+          </button>
+          <button className={`nav-item ${view.type === 'calendar' ? 'active' : ''}`} onClick={() => setView({ type: 'calendar' })}>
+            <span className="nav-icon"><CalendarPlus size={17} /></span>
+            <span className="nav-label">Calendar</span>
           </button>
         </div>
 
@@ -806,20 +847,36 @@ function Sidebar({ projects, view, setView, onAddTaskClick, onAddProject, onEdit
           </div>
         </div>
 
-        {labels.length > 0 && (
-          <div className="sidebar-section">
-            <div className="sidebar-section-head"><span>Labels</span></div>
+        <div className="sidebar-section">
+          <div className="sidebar-section-head">
+            <span>Labels</span>
+            <button className="add-mini" onClick={onAddLabel} title="Add label"><Plus size={15} /></button>
+          </div>
+          {labels.length > 0 && (
             <div className="nav-list">
               {labels.map(l => (
-                <button key={l} className={`nav-item ${view.type === 'label' && view.id === l ? 'active' : ''}`} onClick={() => setView({ type: 'label', id: l })}>
-                  <span className="nav-icon"><Tag size={15} /></span>
-                  <span className="nav-label">{l}</span>
-                </button>
+                <div key={l} style={{ display: 'flex', alignItems: 'center' }}>
+                  <button className={`nav-item ${view.type === 'label' && view.id === l ? 'active' : ''}`} style={{ flex: 1 }}
+                    onClick={() => setView({ type: 'label', id: l })}>
+                    <span className="nav-icon"><Tag size={15} /></span>
+                    <span className="nav-label">{l}</span>
+                  </button>
+                  <IconBtn icon={Pencil} title="Edit label" size={13} onClick={() => onEditLabel(l)} />
+                </div>
               ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </aside>
+
+      <button
+        className={`sidebar-toggle-tab ${open ? '' : 'collapsed'}`}
+        onClick={onToggle}
+        aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+        title={open ? 'Collapse sidebar' : 'Expand sidebar'}
+      >
+        {open ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+      </button>
     </>
   )
 }
@@ -830,9 +887,10 @@ function Sidebar({ projects, view, setView, onAddTaskClick, onAddProject, onEdit
 export default function App() {
   const [data, setData] = useState(loadData)
   const [view, setView] = useState({ type: 'inbox' })
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === 'undefined' || window.innerWidth > 860)
   const [openTask, setOpenTask] = useState(null)
   const [projectModal, setProjectModal] = useState(null) // {mode:'new'|'edit', project}
+  const [labelModal, setLabelModal] = useState(null) // {label} | 'new' | null
   const [mobileAddOpen, setMobileAddOpen] = useState(false)
 
   useEffect(() => {
@@ -942,6 +1000,33 @@ export default function App() {
     }))
   }
 
+  function saveLabel(oldName, newName) {
+    setData(d => {
+      if (oldName) {
+        // renaming an existing label: update the label list and every task referencing it
+        return {
+          ...d,
+          labels: d.labels.map(l => l === oldName ? newName : l),
+          tasks: d.tasks.map(t => t.labels?.includes(oldName)
+            ? { ...t, labels: t.labels.map(l => l === oldName ? newName : l) }
+            : t),
+        }
+      }
+      if (d.labels.includes(newName)) return d
+      return { ...d, labels: [...d.labels, newName] }
+    })
+    if (oldName && view.type === 'label' && view.id === oldName) setView({ type: 'label', id: newName })
+  }
+
+  function deleteLabel(name) {
+    setData(d => ({
+      ...d,
+      labels: d.labels.filter(l => l !== name),
+      tasks: d.tasks.map(t => t.labels?.includes(name) ? { ...t, labels: t.labels.filter(l => l !== name) } : t),
+    }))
+    if (view.type === 'label' && view.id === name) setView({ type: 'inbox' })
+  }
+
   const inbox = projects.find(p => p.isInbox)
 
   const counts = useMemo(() => {
@@ -982,7 +1067,7 @@ export default function App() {
 
   const days = view.type === 'upcoming' ? Array.from({ length: 7 }, (_, i) => addDays(todayISO(), i)) : []
 
-  function closeMobileSidebar() { setMobileSidebarOpen(false) }
+  function closeMobileSidebar() { if (window.innerWidth <= 860) setSidebarOpen(false) }
 
   return (
     <div className="app">
@@ -995,25 +1080,30 @@ export default function App() {
         onEditProject={(p) => setProjectModal({ mode: 'edit', project: p })}
         onDeleteProject={deleteProject}
         counts={counts}
-        mobileOpen={mobileSidebarOpen}
-        closeMobile={closeMobileSidebar}
+        open={sidebarOpen}
+        onToggle={() => setSidebarOpen(v => !v)}
         labels={labels}
+        onAddLabel={() => setLabelModal({ label: null })}
+        onEditLabel={(l) => setLabelModal({ label: l })}
       />
 
       <div className="main-col">
         <div className="topbar">
-          <IconBtn icon={Menu} title="Menu" onClick={() => setMobileSidebarOpen(true)} />
+          <IconBtn icon={Menu} title="Menu" onClick={() => setSidebarOpen(true)} />
           <span className="topbar-title">
             {view.type === 'inbox' && 'Inbox'}
             {view.type === 'today' && 'Today'}
             {view.type === 'upcoming' && 'Upcoming'}
+            {view.type === 'calendar' && 'Calendar'}
             {view.type === 'project' && activeProject?.name}
             {view.type === 'label' && '@' + view.id}
           </span>
         </div>
 
         <div className="content-scroll">
-          {view.type === 'upcoming' ? (
+          {view.type === 'calendar' ? (
+            <CalendarView />
+          ) : view.type === 'upcoming' ? (
             <>
               <div className="view-header">
                 <div className="view-title"><CalendarRange size={20} /> Upcoming</div>
@@ -1118,6 +1208,16 @@ export default function App() {
           onClose={() => setProjectModal(null)}
           onSave={addProject}
           onDelete={deleteProject}
+        />
+      )}
+
+      {labelModal && (
+        <LabelModal
+          label={labelModal.label}
+          existingLabels={labels}
+          onClose={() => setLabelModal(null)}
+          onSave={saveLabel}
+          onDelete={deleteLabel}
         />
       )}
     </div>
