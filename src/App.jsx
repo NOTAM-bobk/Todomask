@@ -27,6 +27,23 @@ const APPS = [
   { key: 'storage', label: 'Storage', icon: Database, component: Storage },
 ]
 
+/** Registry that lets each "My Apps" page register its own search provider, so global
+ *  search picks up new apps automatically without editing App.jsx again.
+ *  From inside an app component (e.g. Notes.jsx), call:
+ *    import { registerAppSearch } from './App.jsx'
+ *    useEffect(() => registerAppSearch('notes', (query) => {
+ *      return myNotes
+ *        .filter(n => n.title.toLowerCase().includes(query.toLowerCase()))
+ *        .map(n => ({ id: n.id, label: n.title, onSelect: () => openNote(n.id) }))
+ *    }), [myNotes])
+ *  The search function receives the raw query string and should return an array of
+ *  { id, label, onSelect } results (onSelect is optional; falls back to opening the app). */
+const appSearchRegistry = {}
+export function registerAppSearch(appKey, searchFn) {
+  appSearchRegistry[appKey] = searchFn
+  return () => { if (appSearchRegistry[appKey] === searchFn) delete appSearchRegistry[appKey] }
+}
+
 /* ============================================================
    CONSTANTS & HELPERS
    ============================================================ */
@@ -237,11 +254,49 @@ function parseQuickAdd(raw, projects, labels) {
     }
   }
 
-  if (dateStr) due = { date: dateStr, recurring: !!rule, rule }
+  // Time detection: "3pm", "3:30pm", "3:30 pm", "15:30", "noon", "midnight".
+  let timeStr = null
+  const afterDateLower = text.toLowerCase()
+  if (/\bnoon\b/.test(afterDateLower)) {
+    timeStr = '12:00'
+    text = text.replace(/\bnoon\b/i, '')
+  } else if (/\bmidnight\b/.test(afterDateLower)) {
+    timeStr = '00:00'
+    text = text.replace(/\bmidnight\b/i, '')
+  } else {
+    const ampmMatch = afterDateLower.match(/\b(?:at\s+)?(\d{1,2})(?::([0-5]\d))?\s*(am|pm)\b/)
+    if (ampmMatch) {
+      let h = parseInt(ampmMatch[1], 10)
+      const m = ampmMatch[2] ? parseInt(ampmMatch[2], 10) : 0
+      if (ampmMatch[3] === 'pm' && h < 12) h += 12
+      if (ampmMatch[3] === 'am' && h === 12) h = 0
+      timeStr = `${pad(h)}:${pad(m)}`
+      text = text.replace(new RegExp(ampmMatch[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '')
+    } else {
+      const militaryMatch = afterDateLower.match(/\b(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b/)
+      if (militaryMatch) {
+        const h = parseInt(militaryMatch[1], 10)
+        const m = parseInt(militaryMatch[2], 10)
+        timeStr = `${pad(h)}:${pad(m)}`
+        text = text.replace(new RegExp(militaryMatch[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '')
+      }
+    }
+  }
+
+  if (dateStr || timeStr) due = { date: dateStr || todayISO(), recurring: !!rule, rule, time: timeStr }
 
   text = text.replace(/\s{2,}/g, ' ').trim()
 
   return { content: text, priority, projectId, labelNames, due }
+}
+
+/** Formats a 24h "HH:MM" time string as "3:30 PM". */
+function formatTimeLabel(time) {
+  if (!time) return ''
+  const [h, m] = time.split(':').map(Number)
+  const period = h >= 12 ? 'PM' : 'AM'
+  const hour12 = h % 12 === 0 ? 12 : h % 12
+  return `${hour12}:${pad(m)} ${period}`
 }
 
 function loadData() {
@@ -419,6 +474,7 @@ function TaskRow({
                 >
                   {task.due.recurring ? <Repeat size={12} /> : <Calendar size={12} />}
                   {task.due.recurring ? recurrenceLabel(task.due.rule) : formatDueLabel(task.due.date)}
+                  {task.due.time ? ` \u00b7 ${formatTimeLabel(task.due.time)}` : ''}
                 </span>
               )}
               {task.labels?.map(l => {
@@ -558,7 +614,7 @@ function AddTaskForm({ projects, defaultProjectId, defaultSectionId, defaultDue,
       <div className="add-task-hint">Try: "Call mom tomorrow p1 @family" &middot; Enter to add, Shift+Enter for new line</div>
       <div className="add-task-form-actions" style={{ position: 'relative', flexWrap: 'wrap' }}>
         <button type="button" className={`pill-btn ${due ? 'active' : ''}`} onClick={() => setShowDue(v => !v)}>
-          <Calendar size={13} /> {due ? (due.recurring ? recurrenceLabel(due.rule) : formatDueLabel(due.date)) : 'Date'}
+          <Calendar size={13} /> {due ? `${due.recurring ? recurrenceLabel(due.rule) : formatDueLabel(due.date)}${due.time ? ' \u00b7 ' + formatTimeLabel(due.time) : ''}` : 'Date'}
         </button>
         {showDue && (
           <div style={{ position: 'absolute', top: 34, left: 0, zIndex: 50 }}>
@@ -646,7 +702,10 @@ function TaskDetailModal({ task, projects, allTasks, onClose, onUpdate, onDelete
           <div className="field">
             <label>Due date</label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <input type="date" value={task.due?.date || ''} onChange={e => onUpdate(task.id, { due: e.target.value ? { date: e.target.value, recurring: false, rule: null } : null })} />
+              <input type="date" value={task.due?.date || ''} onChange={e => onUpdate(task.id, { due: e.target.value ? { ...task.due, date: e.target.value, recurring: false, rule: null } : null })} />
+              {task.due && (
+                <input type="time" value={task.due?.time || ''} onChange={e => onUpdate(task.id, { due: { ...task.due, time: e.target.value || null } })} />
+              )}
               {task.due && (
                 <button className="btn ghost" type="button" onClick={() => onUpdate(task.id, { due: null })}>Clear</button>
               )}
@@ -902,11 +961,31 @@ function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onClose
     }
   }
 
+  // Navigation targets: core views plus every "My Apps" page, so search can jump to any of them.
   const navItems = [
     { icon: InboxIcon, label: 'Go to Inbox', action: () => onGoTo({ type: 'inbox' }) },
     { icon: CalendarDays, label: 'Go to Today', action: () => onGoTo({ type: 'today' }) },
     { icon: CalendarRange, label: 'Go to Upcoming', action: () => onGoTo({ type: 'upcoming' }) },
+    { icon: CalendarPlus, label: 'Go to Calendar', action: () => onGoTo({ type: 'calendar' }) },
+    ...APPS.map(app => ({ icon: app.icon, label: 'Go to ' + app.label, action: () => onGoTo({ type: 'app', id: app.key }) })),
   ]
+  const matchedNavItems = trimmed ? navItems.filter(n => n.label.toLowerCase().includes(lower)) : navItems
+
+  // Content results from any app that has registered a search provider (see registerAppSearch
+  // above) — new apps show up here automatically once they self-register, no edits needed here.
+  let appResults = []
+  if (trimmed) {
+    for (const app of APPS) {
+      const searchFn = appSearchRegistry[app.key]
+      if (!searchFn) continue
+      try {
+        const hits = searchFn(trimmed) || []
+        hits.forEach(h => appResults.push({ ...h, appKey: app.key, appLabel: app.label, appIcon: app.icon }))
+      } catch (err) {
+        console.error(`Search provider for "${app.key}" failed:`, err)
+      }
+    }
+  }
 
   return (
     <div className="modal-backdrop search-backdrop" onClick={onClose}>
@@ -934,29 +1013,54 @@ function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onClose
             ))}
           </div>
         ) : (
-          <div className="search-section">
-            <div className="search-section-label">{results.length} result{results.length !== 1 ? 's' : ''}</div>
-            {results.length === 0 && <div className="search-empty">No matching tasks.</div>}
-            {results.slice(0, 40).map(t => {
-              const project = projects.find(p => p.id === t.projectId)
-              return (
-                <button key={t.id} type="button" className="search-result-item" onClick={() => { onOpenTask(t); onClose() }}>
-                  <span className={`search-result-check ${t.completed ? 'checked' : ''}`}>
-                    {t.completed && <Check size={10} strokeWidth={3} />}
-                  </span>
-                  <span className="search-result-text" style={{ textDecoration: t.completed ? 'line-through' : 'none' }}>
-                    {t.content}
-                  </span>
-                  {t.labels?.slice(0, 2).map(l => (
-                    <span key={l} className="meta-chip label-chip" style={labelColors[l] ? { color: labelColors[l], background: labelColors[l] + '1f' } : undefined}>
-                      <Tag size={10} />{l}
+          <>
+            {matchedNavItems.length > 0 && (
+              <div className="search-section">
+                <div className="search-section-label">Go to</div>
+                {matchedNavItems.map(n => (
+                  <button key={n.label} type="button" className="search-result-item" onClick={() => { n.action(); onClose() }}>
+                    <n.icon size={15} /> {n.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="search-section">
+              <div className="search-section-label">{results.length} task result{results.length !== 1 ? 's' : ''}</div>
+              {results.length === 0 && <div className="search-empty">No matching tasks.</div>}
+              {results.slice(0, 40).map(t => {
+                const project = projects.find(p => p.id === t.projectId)
+                return (
+                  <button key={t.id} type="button" className="search-result-item" onClick={() => { onOpenTask(t); onClose() }}>
+                    <span className={`search-result-check ${t.completed ? 'checked' : ''}`}>
+                      {t.completed && <Check size={10} strokeWidth={3} />}
                     </span>
-                  ))}
-                  {project && <span className="search-result-meta">{project.name}</span>}
-                </button>
-              )
-            })}
-          </div>
+                    <span className="search-result-text" style={{ textDecoration: t.completed ? 'line-through' : 'none' }}>
+                      {t.content}
+                    </span>
+                    {t.labels?.slice(0, 2).map(l => (
+                      <span key={l} className="meta-chip label-chip" style={labelColors[l] ? { color: labelColors[l], background: labelColors[l] + '1f' } : undefined}>
+                        <Tag size={10} />{l}
+                      </span>
+                    ))}
+                    {project && <span className="search-result-meta">{project.name}</span>}
+                  </button>
+                )
+              })}
+            </div>
+            {appResults.length > 0 && (
+              <div className="search-section">
+                <div className="search-section-label">{appResults.length} result{appResults.length !== 1 ? 's' : ''} in apps</div>
+                {appResults.slice(0, 40).map((r, i) => (
+                  <button key={r.id ?? i} type="button" className="search-result-item"
+                    onClick={() => { r.onSelect ? r.onSelect() : onGoTo({ type: 'app', id: r.appKey }); onClose() }}>
+                    <r.appIcon size={15} />
+                    <span className="search-result-text">{r.label}</span>
+                    <span className="search-result-meta">{r.appLabel}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -1039,9 +1143,10 @@ function TaskListView({
   }
 
   if (!showSections) {
+    const isEmpty = tasks.length === 0 && completedTasks.length === 0
     return (
       <div className="section-block">
-        {tasks.length === 0 && completedTasks.length === 0 && (
+        {isEmpty && (
           <EmptyState onAdd={() => setOpenAddFor('root')} />
         )}
         {renderTasks(tasks)}
@@ -1056,22 +1161,24 @@ function TaskListView({
           onUpdate={onUpdate}
           open={showCompleted}
         />
-        <div className="add-task-inline">
-          {openAddFor === 'root' ? (
-            <AddTaskForm
-              projects={projects}
-              defaultProjectId={addFormDefaults.projectId}
-              defaultDue={addFormDefaults.due}
-              autoFocus
-              onAdd={(data) => { onAddTask({ ...data, sectionId: null }); }}
-              onCancel={() => setOpenAddFor(null)}
-            />
-          ) : (
-            <button className="add-task-trigger" onClick={() => setOpenAddFor('root')}>
-              <Plus size={16} /> Add task
-            </button>
-          )}
-        </div>
+        {(!isEmpty || openAddFor === 'root') && (
+          <div className="add-task-inline" style={isEmpty ? { marginTop: 14 } : undefined}>
+            {openAddFor === 'root' ? (
+              <AddTaskForm
+                projects={projects}
+                defaultProjectId={addFormDefaults.projectId}
+                defaultDue={addFormDefaults.due}
+                autoFocus
+                onAdd={(data) => { onAddTask({ ...data, sectionId: null }); }}
+                onCancel={() => setOpenAddFor(null)}
+              />
+            ) : (
+              <button className="add-task-trigger" onClick={() => setOpenAddFor('root')}>
+                <Plus size={16} /> Add task
+              </button>
+            )}
+          </div>
+        )}
       </div>
     )
   }
@@ -1099,14 +1206,16 @@ function TaskListView({
           />
         </div>
       )}
-      <div className="add-task-inline" style={{ marginBottom: 8 }}>
-        {openAddFor === 'root' ? (
-          <AddTaskForm projects={projects} defaultProjectId={addFormDefaults.projectId} autoFocus
-            onAdd={(data) => onAddTask({ ...data, sectionId: null })} onCancel={() => setOpenAddFor(null)} />
-        ) : (
-          <button className="add-task-trigger" onClick={() => setOpenAddFor('root')}><Plus size={16} /> Add task</button>
-        )}
-      </div>
+      {(!totallyEmpty || openAddFor === 'root') && (
+        <div className="add-task-inline" style={{ marginBottom: 8, ...(totallyEmpty ? { marginTop: 14 } : {}) }}>
+          {openAddFor === 'root' ? (
+            <AddTaskForm projects={projects} defaultProjectId={addFormDefaults.projectId} autoFocus
+              onAdd={(data) => onAddTask({ ...data, sectionId: null })} onCancel={() => setOpenAddFor(null)} />
+          ) : (
+            <button className="add-task-trigger" onClick={() => setOpenAddFor('root')}><Plus size={16} /> Add task</button>
+          )}
+        </div>
+      )}
 
       {sections.map(sec => {
         const secTasks = tasks.filter(t => t.sectionId === sec.id)
@@ -1161,8 +1270,19 @@ function Sidebar({
   filters = [], onAddFilter, onEditFilter, onSearchClick,
 }) {
   const [showAccountMenu, setShowAccountMenu] = useState(false)
-  const [appsOpen, setAppsOpen] = useState(false)
+  const [appsOpen, setAppsOpen] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sidebar-apps-open')
+      return saved === null ? true : saved === 'true'
+    } catch {
+      return true
+    }
+  })
   const [listsOpen, setListsOpen] = useState(false)
+
+  useEffect(() => {
+    try { localStorage.setItem('sidebar-apps-open', String(appsOpen)) } catch {}
+  }, [appsOpen])
 
   return (
     <>
