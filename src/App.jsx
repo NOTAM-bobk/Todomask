@@ -4,7 +4,7 @@ import {
   Tag, Check, Flag, ChevronDown, ChevronRight, MoreHorizontal, Trash2,
   Pencil, GripVertical, Calendar, CalendarPlus, Repeat, FolderPlus, User, Circle,
   Search, ArrowUpDown, Filter as FilterIcon, PanelLeftClose, PanelLeftOpen,
-  Mail, StickyNote, ListChecks, BookOpen, Lock, Timer, Database,
+  Mail, StickyNote, ListChecks, BookOpen, Lock, Timer, Database, Eye, EyeOff,
 } from 'lucide-react'
 import CalendarView from './Calendar.jsx'
 import AccountMenu from './AccountMenu.jsx'
@@ -252,17 +252,24 @@ function loadData() {
   const inboxId = uid()
   return {
     projects: [{ id: inboxId, name: 'Inbox', color: '#808080', sections: [], isInbox: true }],
-    tasks: [
-      { id: uid(), content: 'Welcome to your Todoist clone \u2014 tap here to edit', projectId: inboxId, sectionId: null, parentId: null, completed: false, priority: 4, due: { date: todayISO(), recurring: false, rule: null }, labels: ['getting-started'], order: 0 },
-      { id: uid(), content: 'Try typing "Buy milk tomorrow p1 @errands"', projectId: inboxId, sectionId: null, parentId: null, completed: false, priority: 4, due: null, labels: [], order: 1 },
-    ],
-    labels: ['getting-started', 'errands'],
-    labelColors: { 'getting-started': '#7ecc49', errands: '#14aaf5' },
-    filters: [
-      { id: uid(), name: 'Priority 1', color: '#db4c3f', query: 'p1' },
-      { id: uid(), name: 'Overdue', color: '#ff9933', query: 'overdue' },
-    ],
+    tasks: [],
+    labels: [],
+    labelColors: {},
+    filters: [],
   }
+}
+
+/** Tracks whether the viewport is mobile-width. Native HTML5 drag (used for manual
+ *  reordering) fights with tap-to-complete on touch devices, so we use this to turn
+ *  dragging off below the mobile breakpoint. */
+function useIsMobile(breakpoint = 860) {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= breakpoint)
+  useEffect(() => {
+    function onResize() { setIsMobile(window.innerWidth <= breakpoint) }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [breakpoint])
+  return isMobile
 }
 
 /* ============================================================
@@ -479,33 +486,24 @@ function TaskRow({
 /* ============================================================
    COMPLETED TASKS TOGGLE (per section / per list)
    ============================================================ */
-function CompletedList({ tasks, allTasks, projects, labelColors, onToggle, onDelete, onOpen, onUpdate }) {
-  const [open, setOpen] = useState(false)
-  if (!tasks || tasks.length === 0) return null
+function CompletedList({ tasks, allTasks, projects, labelColors, onToggle, onDelete, onOpen, onUpdate, open }) {
+  if (!open || !tasks || tasks.length === 0) return null
   const sorted = [...tasks].sort((a, b) => a.order - b.order)
   return (
-    <div className="completed-section">
-      <button type="button" className="completed-toggle" onClick={() => setOpen(v => !v)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        {open ? 'Hide' : 'Show'} completed ({tasks.length})
-      </button>
-      {open && (
-        <div className="completed-tasks">
-          {sorted.map(t => (
-            <TaskRow
-              key={t.id}
-              task={t}
-              allTasks={allTasks}
-              projects={projects}
-              labelColors={labelColors}
-              onToggle={onToggle}
-              onDelete={onDelete}
-              onOpen={onOpen}
-              onUpdate={onUpdate}
-            />
-          ))}
-        </div>
-      )}
+    <div className="completed-tasks">
+      {sorted.map(t => (
+        <TaskRow
+          key={t.id}
+          task={t}
+          allTasks={allTasks}
+          projects={projects}
+          labelColors={labelColors}
+          onToggle={onToggle}
+          onDelete={onDelete}
+          onOpen={onOpen}
+          onUpdate={onUpdate}
+        />
+      ))}
     </div>
   )
 }
@@ -855,6 +853,14 @@ function SortMenu({ value, onChange, onClose }) {
   )
 }
 
+function ShowCompletedButton({ value, onChange }) {
+  return (
+    <button type="button" className={`pill-btn ${value ? 'active' : ''}`} onClick={() => onChange(!value)}>
+      {value ? <EyeOff size={13} /> : <Eye size={13} />} {value ? 'Hide completed' : 'Show completed'}
+    </button>
+  )
+}
+
 function SortMenuButton({ value, onChange }) {
   const [open, setOpen] = useState(false)
   const current = SORT_OPTIONS.find(o => o.value === value)
@@ -958,16 +964,42 @@ function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onClose
 }
 
 /* ============================================================
+   EMPTY STATE
+   ============================================================ */
+const EMPTY_STATE_MESSAGES = [
+  { title: 'All clear!', body: "Your list is emptier than a gym on New Year's Day, week three." },
+  { title: 'Nothing to do here', body: "Suspiciously peaceful. Enjoy it, or go stir something up." },
+  { title: 'Look at that', body: "You've out-organized yourself. There's nothing left to check off." },
+  { title: 'Blissfully empty', body: "No tasks, no chaos, no problem. Add one whenever you're ready." },
+]
+
+function EmptyState({ onAdd }) {
+  const [msg] = useState(() => EMPTY_STATE_MESSAGES[Math.floor(Math.random() * EMPTY_STATE_MESSAGES.length)])
+  return (
+    <div className="empty-state">
+      <div className="empty-state-icon"><Check size={22} /></div>
+      <h4>{msg.title}</h4>
+      <p>{msg.body}</p>
+      <button type="button" className="btn primary empty-state-btn" onClick={onAdd}>
+        <Plus size={15} /> Add a task
+      </button>
+    </div>
+  )
+}
+
+/* ============================================================
    TASK LIST (handles drag & drop reorder + sections)
    ============================================================ */
 function TaskListView({
   tasks, allTasks, projects, labelColors, completedTasks = [], sortBy = 'manual', sections, showSections, showAddPerSection,
+  showCompleted,
   onToggle, onDelete, onOpen, onUpdate, onReorder, onAddSection,
   addFormDefaults, onAddTask,
 }) {
   const [dragId, setDragId] = useState(null)
   const [overInfo, setOverInfo] = useState(null) // {id, edge}
   const [openAddFor, setOpenAddFor] = useState(null) // sectionId or 'root' or null
+  const isMobile = useIsMobile()
 
   function makeDragHandlers(task) {
     return {
@@ -999,7 +1031,7 @@ function TaskListView({
         onDelete={onDelete}
         onOpen={onOpen}
         onUpdate={onUpdate}
-        dragHandlers={sortBy === 'manual' ? makeDragHandlers(t) : undefined}
+        dragHandlers={sortBy === 'manual' && !isMobile ? makeDragHandlers(t) : undefined}
         isDragging={dragId === t.id}
         dragOverEdge={overInfo?.id === t.id ? overInfo.edge : null}
       />
@@ -1010,11 +1042,7 @@ function TaskListView({
     return (
       <div className="section-block">
         {tasks.length === 0 && completedTasks.length === 0 && (
-          <div className="empty-state">
-            <Check size={32} />
-            <h4>All clear</h4>
-            <p>Nothing here. Enjoy the calm.</p>
-          </div>
+          <EmptyState onAdd={() => setOpenAddFor('root')} />
         )}
         {renderTasks(tasks)}
         <CompletedList
@@ -1026,6 +1054,7 @@ function TaskListView({
           onDelete={onDelete}
           onOpen={onOpen}
           onUpdate={onUpdate}
+          open={showCompleted}
         />
         <div className="add-task-inline">
           {openAddFor === 'root' ? (
@@ -1049,9 +1078,11 @@ function TaskListView({
 
   const unsectioned = tasks.filter(t => !t.sectionId)
   const completedUnsectioned = completedTasks.filter(t => !t.sectionId)
+  const totallyEmpty = sections.length === 0 && unsectioned.length === 0 && completedUnsectioned.length === 0
 
   return (
     <div>
+      {totallyEmpty && <EmptyState onAdd={() => setOpenAddFor('root')} />}
       {(unsectioned.length > 0 || completedUnsectioned.length > 0) && (
         <div className="section-block">
           {renderTasks(unsectioned)}
@@ -1064,6 +1095,7 @@ function TaskListView({
             onDelete={onDelete}
             onOpen={onOpen}
             onUpdate={onUpdate}
+            open={showCompleted}
           />
         </div>
       )}
@@ -1096,6 +1128,7 @@ function TaskListView({
               onDelete={onDelete}
               onOpen={onOpen}
               onUpdate={onUpdate}
+              open={showCompleted}
             />
             <div className="add-task-inline">
               {openAddFor === sec.id ? (
@@ -1147,7 +1180,7 @@ function Sidebar({
         </div>
 
         <button className="add-task-row" onClick={onAddTaskClick}>
-          <Plus size={18} /> Add task
+          <Plus size={19} /> Add task
         </button>
 
         <div className="nav-list">
@@ -1188,7 +1221,7 @@ function Sidebar({
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                       <button className={`nav-item ${view.type === 'app' && view.id === app.key ? 'active' : ''}`} style={{ flex: 1 }}
                         onClick={() => setView({ type: 'app', id: app.key })}>
-                        <span className="nav-icon"><app.icon size={16} /></span>
+                        <span className="nav-icon"><app.icon size={17} /></span>
                         <span className="nav-label">{app.label}</span>
                       </button>
                       <IconBtn
@@ -1207,7 +1240,7 @@ function Sidebar({
                 ) : (
                   <button key={app.key} className={`nav-item ${view.type === 'app' && view.id === app.key ? 'active' : ''}`}
                     onClick={() => setView({ type: 'app', id: app.key })}>
-                    <span className="nav-icon"><app.icon size={16} /></span>
+                    <span className="nav-icon"><app.icon size={17} /></span>
                     <span className="nav-label">{app.label}</span>
                   </button>
                 )
@@ -1222,7 +1255,7 @@ function Sidebar({
             <button className="add-mini" onClick={onAddProject} title="Add project"><Plus size={15} /></button>
           </div>
           <div className="nav-list">
-            {projects.map(p => (
+            {projects.filter(p => !p.isInbox).map(p => (
               <div key={p.id} style={{ display: 'flex', alignItems: 'center' }}>
                 <button className={`nav-item ${view.type === 'project' && view.id === p.id ? 'active' : ''}`} style={{ flex: 1 }}
                   onClick={() => setView({ type: 'project', id: p.id })}>
@@ -1230,9 +1263,7 @@ function Sidebar({
                   <span className="nav-label">{p.name}</span>
                   {counts.byProject[p.id] > 0 && <span className="count">{counts.byProject[p.id]}</span>}
                 </button>
-                {!p.isInbox && (
-                  <IconBtn icon={Pencil} title="Edit project" size={13} onClick={() => onEditProject(p)} />
-                )}
+                <IconBtn icon={Pencil} title="Edit project" size={13} onClick={() => onEditProject(p)} />
               </div>
             ))}
           </div>
@@ -1270,7 +1301,7 @@ function Sidebar({
                 <div key={l} style={{ display: 'flex', alignItems: 'center' }}>
                   <button className={`nav-item ${view.type === 'label' && view.id === l ? 'active' : ''}`} style={{ flex: 1 }}
                     onClick={() => setView({ type: 'label', id: l })}>
-                    <span className="nav-icon"><Tag size={15} style={labelColors[l] ? { color: labelColors[l] } : undefined} /></span>
+                    <span className="nav-icon"><Tag size={17} style={labelColors[l] ? { color: labelColors[l] } : undefined} /></span>
                     <span className="nav-label">{l}</span>
                   </button>
                   <IconBtn icon={Pencil} title="Edit label" size={13} onClick={() => onEditLabel(l)} />
@@ -1298,6 +1329,7 @@ export default function App() {
   const [mobileAddOpen, setMobileAddOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [sortBy, setSortBy] = useState('manual')
+  const [showCompleted, setShowCompleted] = useState(false)
   const [toast, setToast] = useState(null) // {message, onUndo}
   const toastTimer = useRef(null)
 
@@ -1595,6 +1627,7 @@ export default function App() {
             <>
               <div className="view-header">
                 <div className="view-title"><CalendarRange size={20} /> Upcoming</div>
+                <ShowCompletedButton value={showCompleted} onChange={setShowCompleted} />
               </div>
               <div className="task-list-wrap">
                 {days.map(day => {
@@ -1624,6 +1657,7 @@ export default function App() {
                         onDelete={deleteTask}
                         onOpen={setOpenTask}
                         onUpdate={updateTask}
+                        open={showCompleted}
                       />
                     </div>
                   )
@@ -1646,7 +1680,10 @@ export default function App() {
                     <div className="view-subtitle">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
                   )}
                 </div>
-                <SortMenuButton value={sortBy} onChange={setSortBy} />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <ShowCompletedButton value={showCompleted} onChange={setShowCompleted} />
+                  <SortMenuButton value={sortBy} onChange={setSortBy} />
+                </div>
               </div>
               <div className="task-list-wrap">
                 <TaskListView
@@ -1658,6 +1695,7 @@ export default function App() {
                   sortBy={sortBy}
                   sections={activeProject?.sections || []}
                   showSections={showSections}
+                  showCompleted={showCompleted}
                   onToggle={toggleTask}
                   onDelete={deleteTask}
                   onOpen={setOpenTask}
