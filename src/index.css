@@ -154,12 +154,12 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px;
+  padding: 9px 8px;
   margin: 2px 8px;
   border-radius: 6px;
   color: var(--red);
-  font-weight: 500;
-  font-size: 14px;
+  font-weight: 600;
+  font-size: 15px;
 }
 .add-task-row:hover { background: var(--bg-hover); }
 
@@ -775,7 +775,6 @@ button {
 
   .checkbox { width: 22px; height: 22px; margin-top: 8px; }
   .task-row { padding: 11px 2px; }
-  .drag-handle { opacity: 0.5; }
 
   .modal-backdrop { align-items: flex-end; padding: 0; }
   .modal { max-width: 100%; border-radius: 14px 14px 0 0; max-height: 92vh; }
