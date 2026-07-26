@@ -1,0 +1,16 @@
+{
+  "name": "Tasks",
+  "short_name": "Tasks",
+  "description": "A Todoist-style personal productivity app",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#db4c3f",
+  "icons": [
+    { "src": "/task.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/task.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/task.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
