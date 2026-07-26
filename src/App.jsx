@@ -1498,6 +1498,10 @@ export default function App() {
         labelColors={labelColors}
         onAddLabel={() => setLabelModal({ label: null })}
         onEditLabel={(l) => setLabelModal({ label: l })}
+        filters={filters}
+        onAddFilter={() => setFilterModal({ filter: null })}
+        onEditFilter={(f) => setFilterModal({ filter: f })}
+        onSearchClick={() => { setSearchOpen(true); closeMobileSidebar() }}
       />
 
       <div className="main-col">
@@ -1510,6 +1514,7 @@ export default function App() {
             {view.type === 'calendar' && 'Calendar'}
             {view.type === 'project' && activeProject?.name}
             {view.type === 'label' && '@' + view.id}
+            {view.type === 'filter' && title}
           </span>
         </div>
 
@@ -1524,6 +1529,7 @@ export default function App() {
               <div className="task-list-wrap">
                 {days.map(day => {
                   const dayTasks = tasks.filter(t => !t.completed && t.due && t.due.date === day && !t.parentId)
+                  const dayCompleted = tasks.filter(t => t.completed && !t.parentId && t.due && t.due.date === day)
                   const dayLabel = formatDueLabel(day)
                   return (
                     <div className="section-block" key={day}>
@@ -1533,12 +1539,22 @@ export default function App() {
                           <span className="day-sub">{dateFromISO(day).toLocaleDateString(undefined, { weekday: 'long' })}</span>
                         )}
                       </div>
-                      {dayTasks.length === 0 ? (
+                      {dayTasks.length === 0 && dayCompleted.length === 0 ? (
                         <div style={{ color: 'var(--text-faint)', fontSize: 13, padding: '2px 4px 10px' }}>No tasks</div>
                       ) : dayTasks.sort((a, b) => a.order - b.order).map(t => (
                         <TaskRow key={t.id} task={t} allTasks={tasks} projects={projects} labelColors={labelColors}
                           onToggle={toggleTask} onDelete={deleteTask} onOpen={setOpenTask} onUpdate={updateTask} />
                       ))}
+                      <CompletedList
+                        tasks={dayCompleted}
+                        allTasks={tasks}
+                        projects={projects}
+                        labelColors={labelColors}
+                        onToggle={toggleTask}
+                        onDelete={deleteTask}
+                        onOpen={setOpenTask}
+                        onUpdate={updateTask}
+                      />
                     </div>
                   )
                 })}
@@ -1547,16 +1563,20 @@ export default function App() {
           ) : (
             <>
               <div className="view-header">
-                <div className="view-title">
-                  {view.type === 'inbox' && <InboxIcon size={20} />}
-                  {view.type === 'today' && <CalendarDays size={20} />}
-                  {view.type === 'project' && <span className="project-dot" style={{ background: activeProject?.color, width: 12, height: 12 }} />}
-                  {view.type === 'label' && <Tag size={20} />}
-                  {title}
+                <div>
+                  <div className="view-title">
+                    {view.type === 'inbox' && <InboxIcon size={20} />}
+                    {view.type === 'today' && <CalendarDays size={20} />}
+                    {view.type === 'project' && <span className="project-dot" style={{ background: activeProject?.color, width: 12, height: 12 }} />}
+                    {view.type === 'label' && <Tag size={20} />}
+                    {view.type === 'filter' && <FilterIcon size={20} />}
+                    {title}
+                  </div>
+                  {view.type === 'today' && (
+                    <div className="view-subtitle">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
+                  )}
                 </div>
-                {view.type === 'today' && (
-                  <div className="view-subtitle">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
-                )}
+                <SortMenuButton value={sortBy} onChange={setSortBy} />
               </div>
               <div className="task-list-wrap">
                 <TaskListView
@@ -1564,6 +1584,8 @@ export default function App() {
                   allTasks={tasks}
                   projects={projects}
                   labelColors={labelColors}
+                  completedTasks={completedViewTasks}
+                  sortBy={sortBy}
                   sections={activeProject?.sections || []}
                   showSections={showSections}
                   onToggle={toggleTask}
@@ -1637,6 +1659,36 @@ export default function App() {
           onSave={saveLabel}
           onDelete={deleteLabel}
         />
+      )}
+
+      {filterModal && (
+        <FilterModal
+          filter={filterModal.filter}
+          onClose={() => setFilterModal(null)}
+          onSave={saveFilter}
+          onDelete={deleteFilterFn}
+        />
+      )}
+
+      {searchOpen && (
+        <SearchModal
+          tasks={tasks}
+          projects={projects}
+          labelColors={labelColors}
+          onOpenTask={(t) => setOpenTask(t)}
+          onGoTo={(v) => setView(v)}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
+
+      {toast && (
+        <div className="toast">
+          <span>{toast.message}</span>
+          {toast.onUndo && (
+            <button type="button" className="toast-undo" onClick={() => { toast.onUndo(); setToast(null) }}>Undo</button>
+          )}
+          <button type="button" className="toast-close" aria-label="Dismiss" onClick={() => setToast(null)}><X size={14} /></button>
+        </div>
       )}
     </div>
   )
