@@ -68,9 +68,9 @@ button {
   -webkit-overflow-scrolling: touch;
 }
 
-/* ---------- Top bar (mobile) ---------- */
+/* ---------- Top bar ---------- */
 .topbar {
-  display: none;
+  display: flex;
   align-items: center;
   height: var(--topbar-height);
   padding: 0 8px;
@@ -93,6 +93,10 @@ button {
   text-overflow: ellipsis;
 }
 
+@media (min-width: 861px) {
+  .topbar-title { display: none; }
+}
+
 /* ---------- Sidebar ---------- */
 .sidebar {
   width: var(--sidebar-width);
@@ -111,29 +115,6 @@ button {
   opacity: 0;
   border-right: none;
 }
-
-/* Slide tab: sits on the sidebar's edge, toggles it open/closed */
-.sidebar-toggle-tab {
-  position: fixed;
-  top: 50%;
-  transform: translateY(-50%);
-  left: calc(var(--sidebar-width) - 13px);
-  width: 26px;
-  height: 44px;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 8px 8px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  box-shadow: 1px 0 4px rgba(0,0,0,0.06);
-  z-index: 65;
-  transition: left .22s ease;
-}
-.sidebar-toggle-tab:hover { color: var(--text); background: var(--bg-hover); }
-.sidebar-toggle-tab.collapsed { left: 0; border-radius: 0 8px 8px 0; }
 
 .sidebar-header {
   display: flex;
@@ -225,6 +206,15 @@ button {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.apps-section { margin-top: 6px; }
+.apps-toggle { font-weight: 700; }
+.nav-sub-list { padding-left: 10px; }
+.nav-sub-empty {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  padding: 6px 8px;
 }
 
 .sidebar-overlay {
@@ -749,8 +739,6 @@ button {
    MOBILE
    ========================================================= */
 @media (max-width: 860px) {
-  .topbar { display: flex; }
-
   .sidebar {
     position: fixed;
     top: 0;
@@ -776,13 +764,6 @@ button {
     inset: 0;
     background: rgba(0,0,0,0.45);
     z-index: 55;
-  }
-
-  .sidebar-toggle-tab {
-    left: calc(min(82vw, 320px) - 13px);
-  }
-  .sidebar-toggle-tab.collapsed {
-    left: 0;
   }
 
   .view-header { padding: 14px 16px 4px; }
