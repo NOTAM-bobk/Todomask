@@ -4,7 +4,7 @@ import {
   Tag, Check, Flag, ChevronDown, ChevronRight, MoreHorizontal, Trash2,
   Pencil, GripVertical, Calendar, CalendarPlus, Repeat, FolderPlus, User, Circle,
   Search, ArrowUpDown, Filter as FilterIcon, PanelLeftClose, PanelLeftOpen,
-  Mail, StickyNote, ListChecks, BookOpen, Lock, Timer, Database, Eye, EyeOff,
+  Mail, StickyNote, ListChecks, BookOpen, Lock, Timer, Database, Eye, EyeOff, Flame,
 } from 'lucide-react'
 import CalendarView from './Calendar.jsx'
 import AccountMenu from './AccountMenu.jsx'
@@ -87,6 +87,22 @@ function addDays(iso, n) {
 function dateFromISO(iso) { return new Date(iso + 'T00:00:00') }
 
 function isBeforeToday(iso) { return iso < todayISO() }
+
+/** Given a list of ISO dates the user completed at least one task on, returns the
+ *  current daily streak. If today has no activity yet, the streak still counts
+ *  (using yesterday as the anchor) so it doesn't zero out the moment midnight passes —
+ *  it's up to the caller to grey out the badge until today's activity lands. */
+function computeStreak(activeDays) {
+  const set = new Set(activeDays)
+  const today = todayISO()
+  let cursor = set.has(today) ? today : addDays(today, -1)
+  let streak = 0
+  while (set.has(cursor)) {
+    streak++
+    cursor = addDays(cursor, -1)
+  }
+  return streak
+}
 
 function formatDueLabel(iso) {
   if (!iso) return ''
@@ -311,6 +327,7 @@ function loadData() {
     labels: [],
     labelColors: {},
     filters: [],
+    streakDays: [],
   }
 }
 
@@ -567,33 +584,41 @@ function CompletedList({ tasks, allTasks, projects, labelColors, onToggle, onDel
 /* ============================================================
    ADD TASK FORM (inline, expandable)
    ============================================================ */
-function AddTaskForm({ projects, defaultProjectId, defaultSectionId, defaultDue, onAdd, onCancel, autoFocus }) {
+function AddTaskForm({ projects, labels = [], defaultProjectId, defaultSectionId, defaultDue, onAdd, onCancel, autoFocus }) {
   const [text, setText] = useState('')
   const [priority, setPriority] = useState(4)
   const [due, setDue] = useState(defaultDue || null)
   const [projectId, setProjectId] = useState(defaultProjectId)
+  const [pickedLabels, setPickedLabels] = useState([])
   const [showDue, setShowDue] = useState(false)
   const [showPriority, setShowPriority] = useState(false)
   const [showProject, setShowProject] = useState(false)
+  const [showLabels, setShowLabels] = useState(false)
   const taRef = useRef(null)
 
   useEffect(() => { if (autoFocus && taRef.current) taRef.current.focus() }, [autoFocus])
+
+  function toggleLabel(name) {
+    setPickedLabels(ls => ls.includes(name) ? ls.filter(l => l !== name) : [...ls, name])
+  }
 
   function submit() {
     const parsed = parseQuickAdd(text, projects, [])
     const content = parsed.content || text.trim()
     if (!content) return
+    const mergedLabels = [...new Set([...(parsed.labelNames || []), ...pickedLabels])]
     onAdd({
       content,
       priority: parsed.priority !== 4 ? parsed.priority : priority,
       due: parsed.due || due,
       projectId: parsed.projectId || projectId,
       sectionId: defaultSectionId || null,
-      labelNames: parsed.labelNames,
+      labelNames: mergedLabels,
     })
     setText('')
     setDue(defaultDue || null)
     setPriority(4)
+    setPickedLabels([])
   }
 
   const currentProject = projects.find(p => p.id === projectId)
@@ -639,6 +664,21 @@ function AddTaskForm({ projects, defaultProjectId, defaultSectionId, defaultDue,
               {projects.map(p => (
                 <button key={p.id} className="popover-item" onClick={() => { setProjectId(p.id); setShowProject(false) }}>
                   <span className="project-dot" style={{ background: p.color }} /> {p.name}
+                </button>
+              ))}
+            </Popover>
+          </div>
+        )}
+        <button type="button" className={`pill-btn ${pickedLabels.length ? 'active' : ''}`} onClick={() => setShowLabels(v => !v)}>
+          <Tag size={13} /> {pickedLabels.length ? pickedLabels.join(', ') : 'Labels'}
+        </button>
+        {showLabels && (
+          <div style={{ position: 'absolute', top: 34, left: 270, zIndex: 50 }}>
+            <Popover onClose={() => setShowLabels(false)}>
+              {labels.length === 0 && <div className="popover-item" style={{ color: 'var(--text-faint)' }}>No labels yet</div>}
+              {labels.map(l => (
+                <button key={l} type="button" className="popover-item" onClick={() => toggleLabel(l)}>
+                  {pickedLabels.includes(l) ? <Check size={13} /> : <Tag size={13} />} {l}
                 </button>
               ))}
             </Popover>
@@ -1095,7 +1135,7 @@ function EmptyState({ onAdd }) {
    TASK LIST (handles drag & drop reorder + sections)
    ============================================================ */
 function TaskListView({
-  tasks, allTasks, projects, labelColors, completedTasks = [], sortBy = 'manual', sections, showSections, showAddPerSection,
+  tasks, allTasks, projects, labelColors, labels = [], completedTasks = [], sortBy = 'manual', sections, showSections, showAddPerSection,
   showCompleted,
   onToggle, onDelete, onOpen, onUpdate, onReorder, onAddSection,
   addFormDefaults, onAddTask,
@@ -1166,6 +1206,7 @@ function TaskListView({
             {openAddFor === 'root' ? (
               <AddTaskForm
                 projects={projects}
+                labels={labels}
                 defaultProjectId={addFormDefaults.projectId}
                 defaultDue={addFormDefaults.due}
                 autoFocus
@@ -1209,7 +1250,7 @@ function TaskListView({
       {(!totallyEmpty || openAddFor === 'root') && (
         <div className="add-task-inline" style={{ marginBottom: 8, ...(totallyEmpty ? { marginTop: 14 } : {}) }}>
           {openAddFor === 'root' ? (
-            <AddTaskForm projects={projects} defaultProjectId={addFormDefaults.projectId} autoFocus
+            <AddTaskForm projects={projects} labels={labels} defaultProjectId={addFormDefaults.projectId} autoFocus
               onAdd={(data) => onAddTask({ ...data, sectionId: null })} onCancel={() => setOpenAddFor(null)} />
           ) : (
             <button className="add-task-trigger" onClick={() => setOpenAddFor('root')}><Plus size={16} /> Add task</button>
@@ -1241,7 +1282,7 @@ function TaskListView({
             />
             <div className="add-task-inline">
               {openAddFor === sec.id ? (
-                <AddTaskForm projects={projects} defaultProjectId={addFormDefaults.projectId} defaultSectionId={sec.id} autoFocus
+                <AddTaskForm projects={projects} labels={labels} defaultProjectId={addFormDefaults.projectId} defaultSectionId={sec.id} autoFocus
                   onAdd={(data) => onAddTask({ ...data, sectionId: sec.id })} onCancel={() => setOpenAddFor(null)} />
               ) : (
                 <button className="add-task-trigger" onClick={() => setOpenAddFor(sec.id)}><Plus size={16} /> Add task</button>
@@ -1267,7 +1308,7 @@ function TaskListView({
 function Sidebar({
   projects, view, setView, onAddTaskClick, onAddProject, onEditProject, onDeleteProject,
   counts, open, onToggle, labels, labelColors = {}, onAddLabel, onEditLabel,
-  filters = [], onAddFilter, onEditFilter, onSearchClick,
+  onSearchClick, streakCount = 0, streakToday = false,
 }) {
   const [showAccountMenu, setShowAccountMenu] = useState(false)
   const [appsOpen, setAppsOpen] = useState(() => {
@@ -1391,27 +1432,6 @@ function Sidebar({
 
         <div className="sidebar-section">
           <div className="sidebar-section-head">
-            <span>Filters</span>
-            <button className="add-mini" onClick={onAddFilter} title="Add filter"><Plus size={15} /></button>
-          </div>
-          {filters.length > 0 && (
-            <div className="nav-list">
-              {filters.map(f => (
-                <div key={f.id} style={{ display: 'flex', alignItems: 'center' }}>
-                  <button className={`nav-item ${view.type === 'filter' && view.id === f.id ? 'active' : ''}`} style={{ flex: 1 }}
-                    onClick={() => setView({ type: 'filter', id: f.id })}>
-                    <span className="nav-icon"><span className="project-dot" style={{ background: f.color }} /></span>
-                    <span className="nav-label">{f.name}</span>
-                  </button>
-                  <IconBtn icon={Pencil} title="Edit filter" size={13} onClick={() => onEditFilter(f)} />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-section-head">
             <span>Labels</span>
             <button className="add-mini" onClick={onAddLabel} title="Add label"><Plus size={15} /></button>
           </div>
@@ -1429,6 +1449,31 @@ function Sidebar({
               ))}
             </div>
           )}
+        </div>
+
+        <div
+          className={`sidebar-streak ${streakToday ? 'active' : ''}`}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 14px', margin: '8px 6px 4px',
+            borderTop: '1px solid var(--border, #e5e5e5)',
+            paddingTop: 14,
+          }}
+          title={streakToday
+            ? `${streakCount} day streak \u2014 today's task is done, keep it going!`
+            : `${streakCount} day streak \u2014 complete a task today to keep it alive`}
+        >
+          <Flame
+            size={18}
+            style={{ color: streakToday ? 'var(--red, #db4c3f)' : 'var(--text-faint, #9ca3af)', flexShrink: 0 }}
+            fill={streakToday ? 'var(--red, #db4c3f)' : 'none'}
+          />
+          <span style={{ fontSize: 13, fontWeight: 600, color: streakToday ? 'var(--red, #db4c3f)' : 'var(--text-faint, #9ca3af)' }}>
+            {streakCount}
+          </span>
+          <span style={{ fontSize: 12, color: 'var(--text-faint, #9ca3af)' }}>
+            day streak
+          </span>
         </div>
       </aside>
     </>
@@ -1448,7 +1493,7 @@ export default function App() {
   const [filterModal, setFilterModal] = useState(null) // {filter} | {filter: null} | null
   const [mobileAddOpen, setMobileAddOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
-  const [sortBy, setSortBy] = useState('manual')
+  const [sortBy, setSortBy] = useState('date')
   const [showCompleted, setShowCompleted] = useState(false)
   const [toast, setToast] = useState(null) // {message, onUndo}
   const toastTimer = useRef(null)
@@ -1477,6 +1522,9 @@ export default function App() {
   const { projects, tasks, labels } = data
   const labelColors = data.labelColors || {}
   const filters = data.filters || []
+  const streakDays = data.streakDays || []
+  const streakCount = computeStreak(streakDays)
+  const streakToday = streakDays.includes(todayISO())
 
   function updateTasks(fn) {
     setData(d => ({ ...d, tasks: fn(d.tasks) }))
@@ -1521,7 +1569,13 @@ export default function App() {
       return
     }
     const willComplete = !task.completed
-    updateTasks(ts => ts.map(t => t.id === task.id ? { ...t, completed: willComplete } : t))
+    setData(d => ({
+      ...d,
+      tasks: d.tasks.map(t => t.id === task.id ? { ...t, completed: willComplete } : t),
+      streakDays: willComplete && !(d.streakDays || []).includes(todayISO())
+        ? [...(d.streakDays || []), todayISO()]
+        : (d.streakDays || []),
+    }))
     if (willComplete) {
       showToast('Task completed', () => {
         updateTasks(ts => ts.map(t => t.id === task.id ? { ...t, completed: false } : t))
@@ -1703,10 +1757,9 @@ export default function App() {
         labelColors={labelColors}
         onAddLabel={() => setLabelModal({ label: null })}
         onEditLabel={(l) => setLabelModal({ label: l })}
-        filters={filters}
-        onAddFilter={() => setFilterModal({ filter: null })}
-        onEditFilter={(f) => setFilterModal({ filter: f })}
         onSearchClick={() => { setSearchOpen(true); closeMobileSidebar() }}
+        streakCount={streakCount}
+        streakToday={streakToday}
       />
 
       <div className="main-col">
@@ -1811,6 +1864,7 @@ export default function App() {
                   allTasks={tasks}
                   projects={projects}
                   labelColors={labelColors}
+                  labels={labels}
                   completedTasks={completedViewTasks}
                   sortBy={sortBy}
                   sections={activeProject?.sections || []}
@@ -1845,6 +1899,7 @@ export default function App() {
             <div className="modal-body">
               <AddTaskForm
                 projects={projects}
+                labels={labels}
                 defaultProjectId={addDefaults.projectId}
                 defaultDue={addDefaults.due}
                 autoFocus
