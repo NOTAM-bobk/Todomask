@@ -1,6 +1,6 @@
 {
-  "name": "Tasks",
-  "short_name": "Tasks",
+  "name": "todomask",
+  "short_name": "todomask",
   "description": "A Todoist-style personal productivity app",
   "start_url": "/",
   "scope": "/",
