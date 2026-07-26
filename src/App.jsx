@@ -1,12 +1,31 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Menu, X, Plus, Inbox as InboxIcon, CalendarDays, CalendarRange, Hash,
-  Tag, Check, Flag, ChevronDown, ChevronRight, ChevronLeft, MoreHorizontal, Trash2,
+  X, Plus, Inbox as InboxIcon, CalendarDays, CalendarRange, Hash,
+  Tag, Check, Flag, ChevronDown, ChevronRight, MoreHorizontal, Trash2,
   Pencil, GripVertical, Calendar, CalendarPlus, Repeat, FolderPlus, User, Circle,
-  Search, ArrowUpDown, Filter as FilterIcon,
+  Search, ArrowUpDown, Filter as FilterIcon, PanelLeftClose, PanelLeftOpen,
+  Mail, StickyNote, ListChecks, BookOpen, Lock, Timer, Database,
 } from 'lucide-react'
 import CalendarView from './Calendar.jsx'
 import AccountMenu from './AccountMenu.jsx'
+import Email from './Email.jsx'
+import Notes from './Notes.jsx'
+import Lists from './Lists.jsx'
+import Journal from './Journal.jsx'
+import Passwords from './Passwords.jsx'
+import PandoraTimer from './PandoraTimer.jsx'
+import Storage from './Storage.jsx'
+
+/** "My Apps" sidebar entries: each maps to its own standalone page component. */
+const APPS = [
+  { key: 'email', label: 'Email', icon: Mail, component: Email },
+  { key: 'notes', label: 'Notes', icon: StickyNote, component: Notes },
+  { key: 'lists', label: 'Lists', icon: ListChecks, component: Lists },
+  { key: 'journal', label: 'Journal', icon: BookOpen, component: Journal },
+  { key: 'passwords', label: 'Passwords', icon: Lock, component: Passwords },
+  { key: 'pandora-timer', label: 'Pandora Timer', icon: Timer, component: PandoraTimer },
+  { key: 'storage', label: 'Storage', icon: Database, component: Storage },
+]
 
 /* ============================================================
    CONSTANTS & HELPERS
@@ -1109,6 +1128,8 @@ function Sidebar({
   filters = [], onAddFilter, onEditFilter, onSearchClick,
 }) {
   const [showAccountMenu, setShowAccountMenu] = useState(false)
+  const [appsOpen, setAppsOpen] = useState(false)
+  const [listsOpen, setListsOpen] = useState(false)
 
   return (
     <>
@@ -1152,6 +1173,47 @@ function Sidebar({
             <span className="nav-icon"><CalendarPlus size={17} /></span>
             <span className="nav-label">Calendar</span>
           </button>
+        </div>
+
+        <div className="sidebar-section apps-section">
+          <button type="button" className="nav-item apps-toggle" onClick={() => setAppsOpen(v => !v)}>
+            <span className="nav-icon">{appsOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+            <span className="nav-label">My Apps</span>
+          </button>
+          {appsOpen && (
+            <div className="nav-list nav-sub-list">
+              {APPS.map(app => (
+                app.key === 'lists' ? (
+                  <div key={app.key}>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <button className={`nav-item ${view.type === 'app' && view.id === app.key ? 'active' : ''}`} style={{ flex: 1 }}
+                        onClick={() => setView({ type: 'app', id: app.key })}>
+                        <span className="nav-icon"><app.icon size={16} /></span>
+                        <span className="nav-label">{app.label}</span>
+                      </button>
+                      <IconBtn
+                        icon={listsOpen ? ChevronDown : ChevronRight}
+                        title={listsOpen ? 'Collapse lists' : 'Expand lists'}
+                        size={13}
+                        onClick={(e) => { e.stopPropagation(); setListsOpen(v => !v) }}
+                      />
+                    </div>
+                    {listsOpen && (
+                      <div className="nav-sub-list">
+                        <div className="nav-sub-empty">No lists yet</div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <button key={app.key} className={`nav-item ${view.type === 'app' && view.id === app.key ? 'active' : ''}`}
+                    onClick={() => setView({ type: 'app', id: app.key })}>
+                    <span className="nav-icon"><app.icon size={16} /></span>
+                    <span className="nav-label">{app.label}</span>
+                  </button>
+                )
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="sidebar-section">
@@ -1218,15 +1280,6 @@ function Sidebar({
           )}
         </div>
       </aside>
-
-      <button
-        className={`sidebar-toggle-tab ${open ? '' : 'collapsed'}`}
-        onClick={onToggle}
-        aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
-        title={open ? 'Collapse sidebar' : 'Expand sidebar'}
-      >
-        {open ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-      </button>
     </>
   )
 }
@@ -1506,7 +1559,11 @@ export default function App() {
 
       <div className="main-col">
         <div className="topbar">
-          <IconBtn icon={Menu} title="Menu" onClick={() => setSidebarOpen(true)} />
+          <IconBtn
+            icon={sidebarOpen ? PanelLeftClose : PanelLeftOpen}
+            title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            onClick={() => setSidebarOpen(v => !v)}
+          />
           <span className="topbar-title">
             {view.type === 'inbox' && 'Inbox'}
             {view.type === 'today' && 'Today'}
@@ -1515,12 +1572,25 @@ export default function App() {
             {view.type === 'project' && activeProject?.name}
             {view.type === 'label' && '@' + view.id}
             {view.type === 'filter' && title}
+            {view.type === 'app' && (APPS.find(a => a.key === view.id)?.label || 'App')}
           </span>
         </div>
 
         <div className="content-scroll">
           {view.type === 'calendar' ? (
             <CalendarView />
+          ) : view.type === 'app' ? (
+            (() => {
+              const ActiveApp = APPS.find(a => a.key === view.id)?.component
+              return ActiveApp ? <ActiveApp /> : (
+                <div className="task-list-wrap">
+                  <div className="empty-state">
+                    <h4>Not found</h4>
+                    <p>This app isn't wired up yet.</p>
+                  </div>
+                </div>
+              )
+            })()
           ) : view.type === 'upcoming' ? (
             <>
               <div className="view-header">
