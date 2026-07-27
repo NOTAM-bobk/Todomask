@@ -344,6 +344,40 @@ function useIsMobile(breakpoint = 860) {
   return isMobile
 }
 
+/** Detects a device that has an actual keyboard + pointer attached (laptop/desktop),
+ *  as opposed to a touch-only phone/tablet, so global letter shortcuts don't fire
+ *  from an on-screen keyboard or hijack taps. */
+function useHasKeyboard() {
+  const [hasKeyboard, setHasKeyboard] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(pointer: fine) and (hover: hover)').matches
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(pointer: fine) and (hover: hover)')
+    const onChange = () => setHasKeyboard(mq.matches)
+    if (mq.addEventListener) mq.addEventListener('change', onChange)
+    else mq.addListener(onChange)
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', onChange)
+      else mq.removeListener(onChange)
+    }
+  }, [])
+  return hasKeyboard
+}
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+/** Global keyboard shortcuts, shown in the search UI and wired up in App (desktop/keyboard only). */
+const KEYBOARD_SHORTCUTS = [
+  { keys: [IS_MAC ? '\u2318' : 'Ctrl', 'K'], label: 'Open search' },
+  { keys: ['A'], label: 'Add task' },
+  { keys: ['G', 'I'], label: 'Go to Inbox' },
+  { keys: ['G', 'T'], label: 'Go to Today' },
+  { keys: ['G', 'U'], label: 'Go to Upcoming' },
+  { keys: ['G', 'C'], label: 'Go to Calendar' },
+  { keys: ['Esc'], label: 'Close dialog' },
+]
+
 /* ============================================================
    SMALL UI PRIMITIVES
    ============================================================ */
@@ -976,7 +1010,7 @@ function SortMenuButton({ value, onChange }) {
 /* ============================================================
    SEARCH MODAL (popup with live results)
    ============================================================ */
-function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onClose }) {
+function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onAddTask, hasKeyboard, onClose }) {
   const [query, setQuery] = useState('')
   const inputRef = useRef(null)
 
@@ -1003,6 +1037,7 @@ function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onClose
 
   // Navigation targets: core views plus every "My Apps" page, so search can jump to any of them.
   const navItems = [
+    { icon: Plus, label: 'Add task', action: () => onAddTask() },
     { icon: InboxIcon, label: 'Go to Inbox', action: () => onGoTo({ type: 'inbox' }) },
     { icon: CalendarDays, label: 'Go to Today', action: () => onGoTo({ type: 'today' }) },
     { icon: CalendarRange, label: 'Go to Upcoming', action: () => onGoTo({ type: 'upcoming' }) },
@@ -1044,14 +1079,35 @@ function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onClose
         </div>
 
         {!trimmed ? (
-          <div className="search-section">
-            <div className="search-section-label">Navigation</div>
-            {navItems.map(n => (
-              <button key={n.label} type="button" className="search-result-item" onClick={() => { n.action(); onClose() }}>
-                <n.icon size={15} /> {n.label}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="search-section">
+              <div className="search-section-label">Navigation</div>
+              {navItems.map(n => (
+                <button key={n.label} type="button" className="search-result-item" onClick={() => { n.action(); onClose() }}>
+                  <n.icon size={15} /> {n.label}
+                </button>
+              ))}
+            </div>
+            {hasKeyboard && (
+              <div className="search-section">
+                <div className="search-section-label">Keyboard shortcuts</div>
+                {KEYBOARD_SHORTCUTS.map(s => (
+                  <div key={s.label} className="search-result-item" style={{ cursor: 'default', justifyContent: 'space-between' }}>
+                    <span>{s.label}</span>
+                    <span style={{ display: 'flex', gap: 4 }}>
+                      {s.keys.map((k, i) => (
+                        <kbd key={i} style={{
+                          fontSize: 11, fontFamily: 'inherit', padding: '2px 6px', borderRadius: 4,
+                          border: '1px solid var(--border, #d7d7d7)', background: 'var(--bg-secondary, #f4f4f4)',
+                          color: 'var(--text-secondary, #666)',
+                        }}>{k}</kbd>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         ) : (
           <>
             {matchedNavItems.length > 0 && (
@@ -1504,16 +1560,54 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast(null), 5000)
   }
 
+  const hasKeyboard = useHasKeyboard()
+
   useEffect(() => {
+    function isTypingTarget(el) {
+      if (!el) return false
+      const tag = el.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+    }
+    let gPending = false
+    let gTimer = null
     function onKeyDown(e) {
+      // Cmd/Ctrl+K opens search everywhere, keyboard-only devices or not.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setSearchOpen(true)
+        return
+      }
+      // Everything below is a bare-letter shortcut, so only wire it up on devices
+      // that actually have a physical keyboard, and never while typing or in a modal.
+      if (!hasKeyboard) return
+      if (isTypingTarget(document.activeElement)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const anyModalOpen = openTask || projectModal || labelModal || filterModal || searchOpen || mobileAddOpen
+      const key = e.key.toLowerCase()
+      if (gPending) {
+        gPending = false
+        clearTimeout(gTimer)
+        if (anyModalOpen) return
+        if (key === 'i') { e.preventDefault(); setView({ type: 'inbox' }) }
+        else if (key === 't') { e.preventDefault(); setView({ type: 'today' }) }
+        else if (key === 'u') { e.preventDefault(); setView({ type: 'upcoming' }) }
+        else if (key === 'c') { e.preventDefault(); setView({ type: 'calendar' }) }
+        return
+      }
+      if (key === 'g' && !anyModalOpen) {
+        gPending = true
+        clearTimeout(gTimer)
+        gTimer = setTimeout(() => { gPending = false }, 900)
+        return
+      }
+      if (key === 'a' && !anyModalOpen) {
+        e.preventDefault()
+        setMobileAddOpen(true)
       }
     }
     document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [])
+    return () => { document.removeEventListener('keydown', onKeyDown); clearTimeout(gTimer) }
+  }, [hasKeyboard, openTask, projectModal, labelModal, filterModal, searchOpen, mobileAddOpen])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
@@ -1763,13 +1857,13 @@ export default function App() {
       />
 
       <div className="main-col">
-        <div className="topbar">
+        <div className="topbar" style={{ display: 'flex', alignItems: 'center' }}>
           <IconBtn
             icon={sidebarOpen ? PanelLeftClose : PanelLeftOpen}
             title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
             onClick={() => setSidebarOpen(v => !v)}
           />
-          <span className="topbar-title">
+          <span className="topbar-title" style={{ display: 'inline-block' }}>
             {view.type === 'inbox' && 'Inbox'}
             {view.type === 'today' && 'Today'}
             {view.type === 'upcoming' && 'Upcoming'}
@@ -1960,6 +2054,8 @@ export default function App() {
           labelColors={labelColors}
           onOpenTask={(t) => setOpenTask(t)}
           onGoTo={(v) => setView(v)}
+          onAddTask={() => setMobileAddOpen(true)}
+          hasKeyboard={hasKeyboard}
           onClose={() => setSearchOpen(false)}
         />
       )}
