@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   X, Plus, Inbox as InboxIcon, CalendarDays, CalendarRange, Hash,
-  Tag, Check, Flag, ChevronDown, ChevronRight, MoreHorizontal, Trash2,
+  Tag, Check, Flag, ChevronDown, ChevronRight, ChevronLeft, MoreHorizontal, Trash2,
   Pencil, GripVertical, Calendar, CalendarPlus, Repeat, FolderPlus, User, Circle,
   Search, ArrowUpDown, Filter as FilterIcon, PanelLeftClose, PanelLeftOpen,
   Mail, StickyNote, ListChecks, BookOpen, Lock, Timer, Database, Eye, EyeOff, Flame,
+  Settings as SettingsIcon,
 } from 'lucide-react'
 import CalendarView from './Calendar.jsx'
 import AccountMenu from './AccountMenu.jsx'
+import SettingsModal from './Settings.jsx'
 import Email from './Email.jsx'
 import Notes from './Notes.jsx'
 import Lists from './Lists.jsx'
@@ -86,6 +88,13 @@ function addDays(iso, n) {
 
 function dateFromISO(iso) { return new Date(iso + 'T00:00:00') }
 
+/** Returns the ISO date of the Monday that starts the week containing iso. */
+function startOfWeekISO(iso) {
+  const day = dateFromISO(iso).getDay() // 0 = Sun ... 6 = Sat
+  const diff = day === 0 ? -6 : 1 - day
+  return addDays(iso, diff)
+}
+
 function isBeforeToday(iso) { return iso < todayISO() }
 
 /** Given a list of ISO dates the user completed at least one task on, returns the
@@ -118,6 +127,15 @@ function formatDueLabel(iso) {
     return d.toLocaleDateString(undefined, { weekday: 'long' })
   }
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined })
+}
+
+function formatDayGroupHeader(iso) {
+  const t = todayISO()
+  const d = dateFromISO(iso)
+  const shortDate = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  if (iso === t) return `Today \u00b7 ${shortDate}`
+  if (iso === addDays(t, 1)) return `Tomorrow \u00b7 ${shortDate}`
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
 }
 
 function computeNextRecurrence(iso, rule) {
@@ -328,7 +346,18 @@ function loadData() {
     labelColors: {},
     filters: [],
     streakDays: [],
+    settings: DEFAULT_SETTINGS,
   }
+}
+
+/** Defaults for the Settings > Productivity panel. */
+const DEFAULT_SETTINGS = {
+  karmaEnabled: true,
+  dailyGoal: 5,
+  weeklyGoal: 30,
+  goalCelebrations: true,
+  daysOff: ['saturday', 'sunday'],
+  vacationMode: false,
 }
 
 /** Tracks whether the viewport is mobile-width. Native HTML5 drag (used for manual
@@ -1008,6 +1037,103 @@ function SortMenuButton({ value, onChange }) {
 }
 
 /* ============================================================
+   UPCOMING VIEW: week strip header + compact task row
+   ============================================================ */
+function UpcomingWeekStrip({ days, weekOffset, onPrev, onNext, onToday, showCompleted, onToggleCompleted }) {
+  const today = todayISO()
+  const first = dateFromISO(days[0])
+  const last = dateFromISO(days[6])
+  const sameMonth = first.getMonth() === last.getMonth()
+  const monthLabel = sameMonth
+    ? first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+    : `${first.toLocaleDateString(undefined, { month: 'short' })} \u2013 ${last.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`
+
+  return (
+    <div className="upcoming-strip">
+      <div className="upcoming-strip-top">
+        <div className="upcoming-month-label">{monthLabel}</div>
+        <div className="spacer" />
+        {weekOffset !== 0 && (
+          <button type="button" className="calendar-today-btn" onClick={onToday}>Today</button>
+        )}
+        <div className="calendar-nav-btns">
+          <IconBtn icon={ChevronRight} className="flip-h" title="Previous week" onClick={onPrev} />
+          <IconBtn icon={ChevronRight} title="Next week" onClick={onNext} />
+        </div>
+        <ShowCompletedButton value={showCompleted} onChange={onToggleCompleted} />
+      </div>
+      <div className="upcoming-day-tabs">
+        {days.map(day => {
+          const d = dateFromISO(day)
+          const isToday = day === today
+          return (
+            <div key={day} className={`upcoming-day-tab ${isToday ? 'is-today' : ''}`}>
+              <span className="upcoming-day-tab-name">{d.toLocaleDateString(undefined, { weekday: 'short' })}</span>
+              <span className="upcoming-day-tab-num">{d.getDate()}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function UpcomingTaskRow({ task, allTasks, projects, labelColors = {}, onToggle, onDelete, onOpen, onUpdate }) {
+  const [completing, setCompleting] = useState(false)
+  const project = projects.find(p => p.id === task.projectId)
+  const subtasks = allTasks.filter(t => t.parentId === task.id)
+
+  function handleToggle() {
+    if (task.completed || task.due?.recurring) { onToggle(task); return }
+    setCompleting(true)
+    setTimeout(() => onToggle(task), 260)
+  }
+
+  return (
+    <div className={`upcoming-row ${completing ? 'completing' : ''} ${task.completed && !completing ? 'completed' : ''}`}>
+      <button
+        className={`checkbox ${task.priority < 4 ? 'p' + task.priority : ''} ${(completing || task.completed) ? 'checked' : ''}`}
+        onClick={handleToggle}
+        aria-label="Complete task"
+        type="button"
+      >
+        {(completing || task.completed) && <Check size={12} strokeWidth={3} />}
+      </button>
+
+      <div className="upcoming-row-body" onClick={() => onOpen(task)}>
+        <div className="upcoming-row-title">{task.content}</div>
+        <div className="upcoming-row-meta">
+          {task.due?.time && (
+            <span className="upcoming-row-time">
+              <Calendar size={11} /> {formatTimeLabel(task.due.time)}
+            </span>
+          )}
+          {task.due?.recurring && (
+            <span className="upcoming-row-time"><Repeat size={11} /> {recurrenceLabel(task.due.rule)}</span>
+          )}
+          {subtasks.length > 0 && (
+            <span className="upcoming-row-time">{subtasks.filter(s => !s.completed).length} of {subtasks.length} subtasks</span>
+          )}
+        </div>
+      </div>
+
+      <div className="upcoming-row-right">
+        {project && (
+          <span className="upcoming-row-project" title={project.name}>
+            <span className="project-dot" style={{ background: project.color }} />
+            {!project.isInbox && <span className="upcoming-row-project-name">{project.name}</span>}
+          </span>
+        )}
+      </div>
+
+      <button type="button" className="icon-btn upcoming-row-delete" title="Delete" onClick={e => { e.stopPropagation(); onDelete(task.id) }}>
+        <Trash2 size={14} />
+      </button>
+    </div>
+  )
+}
+
+/* ============================================================
    SEARCH MODAL (popup with live results)
    ============================================================ */
 function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onAddTask, hasKeyboard, onClose }) {
@@ -1158,6 +1284,43 @@ function SearchModal({ tasks, projects, labelColors, onOpenTask, onGoTo, onAddTa
             )}
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+/* ============================================================
+   WEEK STRIP (Upcoming view date navigator)
+   ============================================================ */
+function WeekStrip({ weekStart, onPrev, onNext, onToday, onSelectDay }) {
+  const today = todayISO()
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+  const monthLabel = dateFromISO(weekStart).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+  return (
+    <div className="week-strip">
+      <div className="week-strip-top">
+        <div className="week-strip-month">{monthLabel}</div>
+        <div className="week-strip-nav">
+          <IconBtn icon={ChevronLeft} title="Previous week" onClick={onPrev} />
+          <IconBtn icon={ChevronRight} title="Next week" onClick={onNext} />
+          <button type="button" className="week-strip-today-btn" onClick={onToday}>Today</button>
+        </div>
+      </div>
+      <div className="week-strip-days">
+        {weekDays.map(day => {
+          const d = dateFromISO(day)
+          return (
+            <button
+              key={day}
+              type="button"
+              className={`week-strip-day ${day === today ? 'is-today' : ''}`}
+              onClick={() => onSelectDay(day)}
+            >
+              <span className="wsd-label">{d.toLocaleDateString(undefined, { weekday: 'short' })}</span>
+              <span className="wsd-num">{d.getDate()}</span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -1364,7 +1527,7 @@ function TaskListView({
 function Sidebar({
   projects, view, setView, onAddTaskClick, onAddProject, onEditProject, onDeleteProject,
   counts, open, onToggle, labels, labelColors = {}, onAddLabel, onEditLabel,
-  onSearchClick, streakCount = 0, streakToday = false,
+  onSearchClick, streakCount = 0, streakToday = false, onOpenSettings,
 }) {
   const [showAccountMenu, setShowAccountMenu] = useState(false)
   const [appsOpen, setAppsOpen] = useState(() => {
@@ -1385,13 +1548,16 @@ function Sidebar({
     <>
       <div className={`sidebar-overlay ${open ? 'open' : ''}`} onClick={onToggle} />
       <aside className={`sidebar ${open ? '' : 'collapsed'}`}>
-        <div className="sidebar-header" style={{ position: 'relative' }} onClick={() => setShowAccountMenu(v => !v)}>
-          <div className="avatar"><User size={15} /></div>
-          <div className="workspace-name">My Todoist</div>
-          <ChevronDown size={14} className="account-caret" />
+        <div className="sidebar-header" style={{ position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => setShowAccountMenu(v => !v)}>
+            <div className="avatar"><User size={15} /></div>
+            <div className="workspace-name">My Todoist</div>
+            <ChevronDown size={14} className="account-caret" />
+          </div>
+          <IconBtn icon={SettingsIcon} title="Settings" onClick={(e) => { e.stopPropagation(); setShowAccountMenu(false); onOpenSettings?.() }} />
           {showAccountMenu && (
             <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, zIndex: 60 }}>
-              <AccountMenu onClose={() => setShowAccountMenu(false)} />
+              <AccountMenu onClose={() => setShowAccountMenu(false)} onOpenSettings={onOpenSettings} />
             </div>
           )}
         </div>
@@ -1541,8 +1707,20 @@ function Sidebar({
    ============================================================ */
 export default function App() {
   const [data, setData] = useState(loadData)
-  const [view, setView] = useState({ type: 'inbox' })
+  const [view, setView] = useState(() => {
+    try {
+      const raw = localStorage.getItem('todoist-clone-settings-v1')
+      const startPage = raw ? JSON.parse(raw).startPage : null
+      if (startPage === 'today' || startPage === 'upcoming') return { type: startPage }
+    } catch {}
+    return { type: 'inbox' }
+  })
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === 'undefined' || window.innerWidth > 860)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('todoist-clone-theme') || 'light' } catch { return 'light' }
+  })
+  const [weekOffset, setWeekOffset] = useState(0)
   const [openTask, setOpenTask] = useState(null)
   const [projectModal, setProjectModal] = useState(null) // {mode:'new'|'edit', project}
   const [labelModal, setLabelModal] = useState(null) // {label} | 'new' | null
@@ -1551,6 +1729,7 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [sortBy, setSortBy] = useState('date')
   const [showCompleted, setShowCompleted] = useState(false)
+  const [weekOffset, setWeekOffset] = useState(0)
   const [toast, setToast] = useState(null) // {message, onUndo}
   const toastTimer = useRef(null)
 
@@ -1613,9 +1792,27 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
   }, [data])
 
+  useEffect(() => {
+    try { localStorage.setItem('todoist-clone-theme', theme) } catch {}
+    const applyDark = (isDark) => document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
+    if (theme === 'auto') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      applyDark(mq.matches)
+      const onChange = (e) => applyDark(e.matches)
+      mq.addEventListener?.('change', onChange)
+      return () => mq.removeEventListener?.('change', onChange)
+    }
+    applyDark(theme === 'dark')
+  }, [theme])
+
   const { projects, tasks, labels } = data
   const labelColors = data.labelColors || {}
   const filters = data.filters || []
+  const settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) }
+  function updateSettings(patch) {
+    setData(d => ({ ...d, settings: { ...DEFAULT_SETTINGS, ...(d.settings || {}), ...patch } }))
+  }
+
   const streakDays = data.streakDays || []
   const streakCount = computeStreak(streakDays)
   const streakToday = streakDays.includes(todayISO())
@@ -1690,6 +1887,16 @@ export default function App() {
         if (newLabels.length) return { ...d, labels: [...d.labels, ...newLabels] }
       }
       return d
+    })
+  }
+
+  function rescheduleDay(fromIso) {
+    const movingIds = tasks.filter(t => !t.completed && !t.due?.recurring && t.due?.date === fromIso).map(t => t.id)
+    if (!movingIds.length) return
+    const toIso = addDays(fromIso, 1)
+    updateTasks(ts => ts.map(t => movingIds.includes(t.id) ? { ...t, due: { ...t.due, date: toIso } } : t))
+    showToast(`${movingIds.length} task${movingIds.length > 1 ? 's' : ''} rescheduled to tomorrow`, () => {
+      updateTasks(ts => ts.map(t => movingIds.includes(t.id) ? { ...t, due: { ...t.due, date: fromIso } } : t))
     })
   }
 
@@ -1830,7 +2037,8 @@ export default function App() {
     addDefaults = { projectId: inbox?.id, due: null }
   }
 
-  const days = view.type === 'upcoming' ? Array.from({ length: 7 }, (_, i) => addDays(todayISO(), i)) : []
+  const weekStart = view.type === 'upcoming' ? addDays(startOfWeekISO(todayISO()), weekOffset * 7) : null
+  const days = weekStart ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)) : []
 
   function closeMobileSidebar() { if (window.innerWidth <= 860) setSidebarOpen(false) }
 
@@ -1854,6 +2062,7 @@ export default function App() {
         onSearchClick={() => { setSearchOpen(true); closeMobileSidebar() }}
         streakCount={streakCount}
         streakToday={streakToday}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="main-col">
@@ -1892,27 +2101,34 @@ export default function App() {
             })()
           ) : view.type === 'upcoming' ? (
             <>
-              <div className="view-header">
-                <div className="view-title"><CalendarRange size={20} /> Upcoming</div>
-                <ShowCompletedButton value={showCompleted} onChange={setShowCompleted} />
-              </div>
+              <UpcomingWeekStrip
+                days={days}
+                weekOffset={weekOffset}
+                onPrev={() => setWeekOffset(o => o - 1)}
+                onNext={() => setWeekOffset(o => o + 1)}
+                onToday={() => setWeekOffset(0)}
+                showCompleted={showCompleted}
+                onToggleCompleted={setShowCompleted}
+              />
               <div className="task-list-wrap">
                 {days.map(day => {
                   const dayTasks = tasks.filter(t => !t.completed && t.due && t.due.date === day && !t.parentId)
                   const dayCompleted = tasks.filter(t => t.completed && !t.parentId && t.due && t.due.date === day)
                   const dayLabel = formatDueLabel(day)
                   return (
-                    <div className="section-block" key={day}>
-                      <div className="day-group-title">
-                        {dayLabel}
-                        {dayLabel === 'Today' && (
-                          <span className="day-sub">{dateFromISO(day).toLocaleDateString(undefined, { weekday: 'long' })}</span>
+                    <div className="section-block upcoming-day-block" key={day}>
+                      <div className="upcoming-day-head">
+                        <div className="day-group-title">
+                          {dayLabel} <span className="day-sub">&middot; {dateFromISO(day).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+                        </div>
+                        {dayLabel === 'Today' && dayTasks.length > 0 && (
+                          <button type="button" className="reschedule-link" onClick={() => rescheduleDay(day)}>Reschedule</button>
                         )}
                       </div>
                       {dayTasks.length === 0 && dayCompleted.length === 0 ? (
-                        <div style={{ color: 'var(--text-faint)', fontSize: 13, padding: '2px 4px 10px' }}>No tasks</div>
+                        <div className="upcoming-empty">No tasks</div>
                       ) : dayTasks.sort((a, b) => a.order - b.order).map(t => (
-                        <TaskRow key={t.id} task={t} allTasks={tasks} projects={projects} labelColors={labelColors}
+                        <UpcomingTaskRow key={t.id} task={t} allTasks={tasks} projects={projects} labelColors={labelColors}
                           onToggle={toggleTask} onDelete={deleteTask} onOpen={setOpenTask} onUpdate={updateTask} />
                       ))}
                       <CompletedList
@@ -2044,6 +2260,18 @@ export default function App() {
           onClose={() => setFilterModal(null)}
           onSave={saveFilter}
           onDelete={deleteFilterFn}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          theme={theme}
+          onThemeChange={setTheme}
+          onStartPageChange={() => {}}
+          settings={settings}
+          onUpdateSettings={updateSettings}
+          streakCount={streakCount}
         />
       )}
 
