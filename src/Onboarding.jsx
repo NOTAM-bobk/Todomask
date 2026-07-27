@@ -23,7 +23,7 @@ import React, { useEffect, useRef, useState } from 'react'
          return (
            <Onboarding
              onComplete={() => setOnboarded(true)}
-             onLogin={() => { /* route to your login screen */ }}
+             onLogin={() => { // route to your login screen // }}
            />
          )
        }
